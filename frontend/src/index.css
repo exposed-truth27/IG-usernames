@@ -1,0 +1,74 @@
+@import url('https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@800,700,500,400&f[]=satoshi@700,500,400&f[]=jetbrains-mono@400,500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 20% 98%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 201 100% 36%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 20% 92%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 210 20% 94%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 210 20% 92%;
+    --accent-foreground: 222 47% 11%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 201 100% 36%;
+    --radius: 0.5rem;
+  }
+  * { @apply border-border; }
+  html, body {
+    @apply bg-background text-foreground;
+    font-family: 'Satoshi', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    margin: 0;
+    background-image: radial-gradient(circle at 1px 1px, rgba(17,24,39,.045) 1px, transparent 0);
+    background-size: 24px 24px;
+  }
+  h1,h2,h3,h4,h5,h6 { font-family: 'Cabinet Grotesk', sans-serif; letter-spacing:-.02em; }
+  .font-mono, code { font-family: 'JetBrains Mono', monospace; }
+}
+
+@layer components {
+  .rolodex-card {
+    background: hsl(var(--card));
+    border: 1px solid hsl(var(--border));
+    border-radius: 6px;
+    transition: transform 200ms ease-out, box-shadow 200ms ease-out;
+  }
+  .rolodex-card:hover { transform: translateY(-2px); box-shadow: 4px 4px 0 #0076B6; }
+  .chip-cat {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: .7rem; letter-spacing: .06em; text-transform: uppercase;
+    padding: 4px 10px; border-radius: 999px;
+    border: 1px solid hsl(var(--border)); background: white;
+    color: hsl(var(--muted-foreground)); cursor: pointer;
+    transition: background 120ms, color 120ms, border-color 120ms;
+  }
+  .chip-cat:hover { background: hsl(var(--secondary)); color: hsl(var(--foreground)); }
+  .chip-cat.active { background: #0076B6; color: white; border-color: #0076B6; }
+  .silver-divider { height: 1px; background: linear-gradient(90deg, transparent, #C0C0C0, transparent); }
+  .pulse-once { animation: pulse-ring 700ms ease-out; }
+  @keyframes pulse-ring {
+    0%   { box-shadow: 0 0 0 0 rgba(0,118,182,.45); }
+    100% { box-shadow: 0 0 0 14px rgba(0,118,182,0); }
+  }
+  .stagger-in { animation: stagger-in 420ms ease-out both; }
+  @keyframes stagger-in {
+    from { opacity:0; transform: translateY(8px); }
+    to   { opacity:1; transform: translateY(0); }
+  }
+}
