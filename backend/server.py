@@ -108,24 +108,7 @@ def fallback_avatar(username: str) -> str:
 
 
 def fetch_profile_pic(username: str) -> str:
-    try:
-        headers = {
-            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                           "AppleWebKit/537.36 (KHTML, like Gecko) "
-                           "Chrome/120.0.0.0 Safari/537.36"),
-            "Accept-Language": "en-US,en;q=0.9",
-        }
-        r = requests.get(f"https://www.instagram.com/{username}/",
-                         headers=headers, timeout=6, allow_redirects=True)
-        if r.status_code == 200 and r.text:
-            m = re.search(r'<meta\s+property="og:image"\s+content="([^"]+)"',
-                          r.text, re.IGNORECASE)
-            if m:
-                return m.group(1).replace("&amp;", "&")
-    except Exception as e:
-        logger.info(f"Profile pic fetch failed for {username}: {e}")
-    return fallback_avatar(username)
-
+return f"https://unavatar.io/instagram/{username}?fallback={fallback_avatar(username)}"
 
 # ------------------------- Routes -------------------------
 
