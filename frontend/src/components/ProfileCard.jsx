@@ -49,7 +49,7 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
       </div>
       <div className="flex flex-col items-center text-center">
         <div className="relative">
-          <div className="w-24 h-24 rounded-full overflow-hidden border-2 border-[#B0B7BC]/40 bg-slate-900 flex items-center justify-center">
+          <div className="w-24 h-24 rounded-full overflow-hidden border-2 border-[#B0B7BC]/40 bg-slate-900 flex items-center justify-center ring-2 ring-transparent ring-offset-2 ring-offset-slate-800 group-hover:ring-[#0076B6]/60 transition-all duration-200">
             {profile.profile_pic_url && !imgErr ? (
               <img src={proxyImg(profile.profile_pic_url)} alt={profile.username} onError={() => setImgErr(true)} className="w-full h-full object-cover" />
             ) : (
