@@ -1,15 +1,28 @@
-import { useState } from "react";
-import { BadgeCheck, ExternalLink, RefreshCw, Trash2, Tag } from "lucide-react";
+import { useRef, useState } from "react";
+import { BadgeCheck, ExternalLink, RefreshCw, Trash2, Tag, Image as ImageIcon, Upload, Link as LinkIcon, Loader2 } from "lucide-react";
 import { proxyImg, api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuCheckboxItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
+  DropdownMenuSeparator, DropdownMenuCheckboxItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
+} from "@/components/ui/dialog";
 import { toast } from "sonner";
 
 export default function ProfileCard({ profile, categories, onChange, onDelete }) {
   const [imgErr, setImgErr] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [picOpen, setPicOpen] = useState(false);
+  const [picUrl, setPicUrl] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef(null);
+
   const initials = (profile.username || "?").slice(0, 2).toUpperCase();
   const igUrl = `https://instagram.com/${profile.username}`;
+  const isManual = profile.pic_source === "manual";
 
   const toggleCategory = async (catId, checked) => {
     const next = checked
@@ -21,14 +34,64 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
 
   const refresh = async () => {
     setBusy(true);
-    try { const { data } = await api.post(`/profiles/${profile.id}/refresh`); onChange({ ...profile, ...data }); toast.success("Refreshed from Instagram"); }
-    catch { toast.error("Refresh failed"); }
-    finally { setBusy(false); }
+    try {
+      const { data } = await api.post(`/profiles/${profile.id}/refresh`);
+      onChange({ ...profile, ...data });
+      setImgErr(false);
+      toast.success(isManual ? "Refreshed (manual picture kept)" : "Refreshed from Instagram");
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Refresh failed — try setting a picture manually");
+    } finally { setBusy(false); }
   };
 
   const remove = async () => {
     try { await api.delete(`/profiles/${profile.id}`); onDelete(profile.id); }
     catch { toast.error("Delete failed"); }
+  };
+
+  const submitPicUrl = async () => {
+    const v = picUrl.trim();
+    if (!/^https?:\/\//i.test(v)) { toast.error("Enter a valid http(s) URL"); return; }
+    setUploading(true);
+    try {
+      const { data } = await api.post(`/profiles/${profile.id}/picture/url`, { url: v });
+      onChange({ ...profile, ...data });
+      setImgErr(false);
+      setPicUrl("");
+      setPicOpen(false);
+      toast.success("Picture updated");
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Couldn't set picture URL");
+    } finally { setUploading(false); }
+  };
+
+  const submitPicUpload = async (file) => {
+    if (!file) return;
+    if (!/^image\/(jpeg|jpg|png|webp|gif)$/i.test(file.type)) {
+      toast.error("Only JPG, PNG, WEBP, or GIF");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("Max 5 MB");
+      return;
+    }
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const { data } = await api.post(`/profiles/${profile.id}/picture/upload`, form, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      onChange({ ...profile, ...data });
+      setImgErr(false);
+      setPicOpen(false);
+      toast.success("Picture uploaded");
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Upload failed");
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
   };
 
   const catChips = (profile.category_ids || []).map((id) => categories.find((c) => c.id === id)).filter(Boolean);
@@ -39,6 +102,9 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
       <div className="flex items-start justify-between mb-4">
         <span className="font-mono text-[9px] uppercase tracking-[0.3em] text-slate-500">#{(profile.id || "").slice(0, 6)}</span>
         <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button data-testid={`set-pic-${profile.username}`} onClick={() => setPicOpen(true)} className="p-1.5 text-slate-400 hover:text-[#0076B6] hover:bg-slate-700/60 rounded-sm" title="Set picture manually">
+            <ImageIcon className="w-3.5 h-3.5" />
+          </button>
           <button data-testid={`refresh-${profile.username}`} onClick={refresh} disabled={busy} className="p-1.5 text-slate-400 hover:text-[#0076B6] hover:bg-slate-700/60 rounded-sm" title="Refresh from Instagram">
             <RefreshCw className={`w-3.5 h-3.5 ${busy ? "animate-spin" : ""}`} />
           </button>
@@ -47,6 +113,7 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
           </button>
         </div>
       </div>
+
       <div className="flex flex-col items-center text-center">
         <div className="relative">
           <div className="w-24 h-24 rounded-full overflow-hidden border-2 border-[#B0B7BC]/40 bg-slate-900 flex items-center justify-center ring-2 ring-transparent ring-offset-2 ring-offset-slate-800 group-hover:ring-[#0076B6]/60 transition-all duration-200">
@@ -61,13 +128,20 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
               <BadgeCheck className="w-4 h-4 text-white" />
             </div>
           )}
+          {isManual && (
+            <div className="absolute -top-1 -left-1 bg-slate-900 border border-[#B0B7BC]/60 rounded-sm px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-wider text-[#B0B7BC]" title="Manually set picture">
+              manual
+            </div>
+          )}
         </div>
+
         <a href={igUrl} target="_blank" rel="noopener noreferrer" data-testid={`open-${profile.username}`} className="mt-4 font-display font-bold text-lg text-white tracking-tight hover:text-[#0076B6] inline-flex items-center gap-1.5">
           @{profile.username} <ExternalLink className="w-3.5 h-3.5 opacity-60" />
         </a>
         {profile.full_name && <div className="mt-1 text-sm text-slate-400 line-clamp-1">{profile.full_name}</div>}
         {profile.bio && <div className="mt-2 text-xs text-slate-500 line-clamp-2 leading-relaxed">{profile.bio}</div>}
       </div>
+
       <div className="mt-5 pt-4 border-t border-slate-700/70">
         <div className="flex flex-wrap items-center gap-1.5 justify-center min-h-[28px]">
           {catChips.map((c) => (
@@ -95,6 +169,74 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
           </DropdownMenu>
         </div>
       </div>
+
+      {/* Manual picture dialog */}
+      <Dialog open={picOpen} onOpenChange={setPicOpen}>
+        <DialogContent className="bg-slate-800 border-slate-700 rounded-sm sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="font-display uppercase tracking-tight text-white">
+              Set picture · @{profile.username}
+            </DialogTitle>
+            <DialogDescription className="text-slate-400 text-sm">
+              Use this when the auto-fetch can&apos;t find a photo. Manual pictures are preserved across refreshes.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-5">
+            <div>
+              <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-2 inline-flex items-center gap-1.5">
+                <LinkIcon className="w-3 h-3" /> Paste image URL
+              </label>
+              <div className="flex gap-2 mt-2">
+                <Input
+                  data-testid={`pic-url-input-${profile.username}`}
+                  value={picUrl}
+                  onChange={(e) => setPicUrl(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && submitPicUrl()}
+                  placeholder="https://…/photo.jpg"
+                  className="bg-slate-900 border-slate-600 rounded-sm h-10 focus-visible:ring-[#0076B6] font-mono text-sm"
+                />
+                <Button
+                  data-testid={`pic-url-save-${profile.username}`}
+                  onClick={submitPicUrl}
+                  disabled={uploading || !picUrl.trim()}
+                  className="rounded-sm bg-[#0076B6] hover:bg-[#0089d3] font-display uppercase tracking-widest"
+                >
+                  {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Save"}
+                </Button>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <div className="flex-1 h-px bg-slate-700" />
+              <span className="font-mono text-[10px] uppercase tracking-widest text-slate-500">or</span>
+              <div className="flex-1 h-px bg-slate-700" />
+            </div>
+
+            <div>
+              <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-2 inline-flex items-center gap-1.5">
+                <Upload className="w-3 h-3" /> Upload from device
+              </label>
+              <input
+                ref={fileRef}
+                data-testid={`pic-file-input-${profile.username}`}
+                type="file"
+                accept="image/jpeg,image/png,image/webp,image/gif"
+                onChange={(e) => submitPicUpload(e.target.files?.[0])}
+                disabled={uploading}
+                className="mt-2 block w-full text-sm text-slate-400 file:mr-3 file:py-2 file:px-4 file:rounded-sm file:border-0 file:bg-[#0076B6] file:text-white file:font-display file:uppercase file:tracking-wider file:text-xs file:cursor-pointer hover:file:bg-[#0089d3] disabled:opacity-50"
+              />
+              <p className="mt-2 font-mono text-[10px] text-slate-500">JPG, PNG, WEBP, GIF · max 5 MB</p>
+            </div>
+          </div>
+
+          <DialogFooter className="mt-2">
+            <Button variant="outline" onClick={() => setPicOpen(false)} className="rounded-sm border-slate-600 bg-transparent text-slate-300 hover:bg-slate-700">
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
