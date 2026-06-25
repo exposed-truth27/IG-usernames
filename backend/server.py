@@ -31,7 +31,6 @@ api_router = APIRouter(prefix="/api")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# ---------- Cloudinary ----------
 cloudinary.config(
     cloud_name=os.environ.get("CLOUDINARY_CLOUD_NAME", ""),
     api_key=os.environ.get("CLOUDINARY_API_KEY", ""),
@@ -39,7 +38,7 @@ cloudinary.config(
     secure=True,
 )
 ALLOWED_IMAGE_MIME = {"image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif"}
-MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 
 
 def to_str_id(v):
@@ -50,6 +49,16 @@ def to_str_id(v):
 
 PyObjectId = Annotated[str, BeforeValidator(to_str_id)]
 JWT_ALGORITHM = "HS256"
+
+SYS_FAVORITE = "__sys_favorite"
+SYS_ACTIVE   = "__sys_active"
+SYS_COMPLETE = "__sys_complete"
+SYS_CATEGORIES = [
+    {"id": SYS_FAVORITE, "name": "⭐ Favorite", "system": True, "kind": "favorite"},
+    {"id": SYS_ACTIVE,   "name": "Active",     "system": True, "kind": "active"},
+    {"id": SYS_COMPLETE, "name": "Complete",   "system": True, "kind": "complete"},
+]
+SYS_IDS = {c["id"] for c in SYS_CATEGORIES}
 
 
 def get_jwt_secret() -> str:
@@ -68,11 +77,8 @@ def verify_password(password: str, hashed: str) -> bool:
 
 
 def create_access_token(user_id: str, email: str) -> str:
-    payload = {
-        "sub": user_id, "email": email,
-        "exp": datetime.now(timezone.utc) + timedelta(hours=12),
-        "type": "access",
-    }
+    payload = {"sub": user_id, "email": email,
+        "exp": datetime.now(timezone.utc) + timedelta(hours=12), "type": "access"}
     return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
 
@@ -80,10 +86,8 @@ class LoginIn(BaseModel):
     email: EmailStr
     password: str
 
-
 class CategoryIn(BaseModel):
     name: str
-
 
 class Category(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -92,28 +96,22 @@ class Category(BaseModel):
     user_id: str
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
-
 class ProfileIn(BaseModel):
     url_or_username: str
     category_ids: List[str] = []
-
 
 class BulkItem(BaseModel):
     url_or_username: str
     category_names: List[str] = []
 
-
 class BulkIn(BaseModel):
     items: List[BulkItem]
-
 
 class ProfileUpdate(BaseModel):
     category_ids: Optional[List[str]] = None
 
-
 class PictureUrlIn(BaseModel):
     url: HttpUrl
-
 
 class Profile(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -154,7 +152,6 @@ async def get_current_user(request: Request) -> dict:
 
 USERNAME_RE = re.compile(r"^[A-Za-z0-9._]+$")
 
-
 def extract_username(raw: str) -> Optional[str]:
     if not raw:
         return None
@@ -168,92 +165,168 @@ def extract_username(raw: str) -> Optional[str]:
     return None
 
 
-# ============================================================
-# Multi-provider Instagram fetcher  (RapidAPI primary + backups + public)
-# ============================================================
-
-def _norm_result(username: str, full_name="", pic="", is_verified=False, bio="") -> dict:
-    return {
-        "username": username,
-        "full_name": full_name or "",
-        "profile_pic_url": pic or "",
-        "is_verified": bool(is_verified),
-        "bio": bio or "",
-    }
+def _norm_result(username, full_name="", pic="", is_verified=False, bio=""):
+    return {"username": username, "full_name": full_name or "", "profile_pic_url": pic or "",
+            "is_verified": bool(is_verified), "bio": bio or ""}
 
 
-async def _provider_fast_reliable(username: str, key: str) -> dict:
-    host = "instagram-api-fast-reliable-data-scraper.p.rapidapi.com"
-    url = f"https://{host}/profile"
-    headers = {"x-rapidapi-host": host, "x-rapidapi-key": key}
-    async with httpx.AsyncClient(timeout=20.0) as cx:
-        r = await cx.get(url, params={"username": username}, headers=headers)
-        if r.status_code != 200:
-            logger.warning(f"[fast-reliable] {r.status_code}: {r.text[:160]}")
-            return {}
-        data = r.json()
-    candidates = [data, data.get("data"), data.get("user"), (data.get("data") or {}).get("user")]
-    p = next((c for c in candidates if isinstance(c, dict)
-              and (c.get("username") or c.get("full_name") or c.get("profile_pic_url"))), {})
-    if not p:
-        return {}
+def _pick_pic(p):
+    if not isinstance(p, dict):
+        return ""
     pic = p.get("profile_pic_url_hd") or p.get("profile_pic_url")
-    hd = p.get("hd_profile_pic_url_info")
+    hd = p.get("hd_profile_pic_url_info") or p.get("hd_profile_pic_versions")
     if not pic and isinstance(hd, dict):
         pic = hd.get("url")
-    return _norm_result(p.get("username") or username, p.get("full_name") or p.get("name"),
-                        pic, p.get("is_verified", False), p.get("biography") or p.get("bio"))
+    if not pic and isinstance(hd, list) and hd:
+        pic = (hd[0] or {}).get("url")
+    return pic or ""
 
 
-async def _provider_scraper2(username: str, key: str) -> dict:
-    host = "instagram-scraper-api2.p.rapidapi.com"
-    url = f"https://{host}/v1/info"
+async def _provider_cheapest(username, key):
+    host = "instagram-cheapest.p.rapidapi.com"
+    url = f"https://{host}/api/v1/instagram/user/{username}"
     headers = {"x-rapidapi-host": host, "x-rapidapi-key": key}
     async with httpx.AsyncClient(timeout=20.0) as cx:
-        r = await cx.get(url, params={"username_or_id_or_url": username}, headers=headers)
+        r = await cx.get(url, headers=headers)
         if r.status_code != 200:
-            logger.warning(f"[scraper-api2] {r.status_code}: {r.text[:160]}")
+            logger.warning(f"[cheapest] {r.status_code}: {r.text[:200]}")
+            return {}
+        data = r.json()
+    user = ((data or {}).get("data") or {}).get("user") or {}
+    if not user:
+        user = (data or {}).get("user") or data or {}
+    if not isinstance(user, dict) or not (user.get("username") or user.get("full_name") or user.get("profile_pic_url")):
+        return {}
+    return _norm_result(user.get("username") or username,
+                        user.get("full_name") or user.get("name"), _pick_pic(user),
+                        user.get("is_verified", False), user.get("biography") or user.get("bio"))
+
+
+async def _provider_media_api(username, key):
+    host = "instagram-media-api.p.rapidapi.com"
+    headers = {"x-rapidapi-host": host, "x-rapidapi-key": key}
+    paths = [("GET", f"/profile/{username}", None), ("GET", "/user", {"username": username}),
+             ("GET", "/profile", {"username": username}), ("GET", "/v1/user", {"username": username})]
+    async with httpx.AsyncClient(timeout=18.0) as cx:
+        for method, path, params in paths:
+            try:
+                r = await cx.request(method, f"https://{host}{path}", params=params, headers=headers)
+            except Exception:
+                continue
+            if r.status_code != 200:
+                continue
+            try:
+                data = r.json()
+            except Exception:
+                continue
+            p = data if isinstance(data, dict) else {}
+            for k in ("user", "data", "result"):
+                if isinstance(p.get(k), dict):
+                    p = p[k]; break
+            if not (p.get("username") or p.get("full_name") or p.get("profile_pic_url")):
+                continue
+            return _norm_result(p.get("username") or username, p.get("full_name") or p.get("name"),
+                                _pick_pic(p), p.get("is_verified", False),
+                                p.get("biography") or p.get("bio"))
+    return {}
+
+
+async def _provider_profile1(username, key):
+    host = "instagram-profile1.p.rapidapi.com"
+    headers = {"x-rapidapi-host": host, "x-rapidapi-key": key}
+    paths = [("GET", "/getprofile", {"username": username}), ("GET", "/profile", {"username": username}),
+             ("GET", f"/profile/{username}", None), ("GET", "/user", {"username": username})]
+    async with httpx.AsyncClient(timeout=18.0) as cx:
+        for method, path, params in paths:
+            try:
+                r = await cx.request(method, f"https://{host}{path}", params=params, headers=headers)
+            except Exception:
+                continue
+            if r.status_code != 200:
+                continue
+            try:
+                data = r.json()
+            except Exception:
+                continue
+            p = data if isinstance(data, dict) else {}
+            for k in ("user", "data", "result", "profile"):
+                if isinstance(p.get(k), dict):
+                    p = p[k]; break
+            if not (p.get("username") or p.get("full_name") or p.get("profile_pic_url")):
+                continue
+            return _norm_result(p.get("username") or username, p.get("full_name") or p.get("name"),
+                                _pick_pic(p), p.get("is_verified", False),
+                                p.get("biography") or p.get("bio"))
+    return {}
+
+
+async def _provider_scraper_stable(username, key):
+    host = "instagram-scraper-stable-api.p.rapidapi.com"
+    headers = {"x-rapidapi-host": host, "x-rapidapi-key": key,
+               "Content-Type": "application/x-www-form-urlencoded"}
+    paths = ["/get_ig_user_v2.php", "/get_ig_user.php", "/get_user_info.php", "/search_users.php"]
+    async with httpx.AsyncClient(timeout=18.0) as cx:
+        for path in paths:
+            try:
+                r = await cx.post(f"https://{host}{path}", data={"username_or_url": username},
+                                   headers=headers)
+            except Exception:
+                continue
+            if r.status_code != 200:
+                continue
+            try:
+                data = r.json()
+            except Exception:
+                continue
+            p = data if isinstance(data, dict) else {}
+            for k in ("user", "data", "result"):
+                if isinstance(p.get(k), dict):
+                    p = p[k]; break
+            if not (p.get("username") or p.get("full_name") or p.get("profile_pic_url")):
+                continue
+            return _norm_result(p.get("username") or username, p.get("full_name") or p.get("name"),
+                                _pick_pic(p), p.get("is_verified", False),
+                                p.get("biography") or p.get("bio"))
+    return {}
+
+
+async def _provider_scraper2(username, key):
+    host = "instagram-scraper-api2.p.rapidapi.com"
+    headers = {"x-rapidapi-host": host, "x-rapidapi-key": key}
+    async with httpx.AsyncClient(timeout=20.0) as cx:
+        r = await cx.get(f"https://{host}/v1/info", params={"username_or_id_or_url": username},
+                          headers=headers)
+        if r.status_code != 200:
             return {}
         data = r.json()
     p = data.get("data") if isinstance(data, dict) else None
     if not isinstance(p, dict):
         return {}
-    pic = p.get("hd_profile_pic_url_info", {}).get("url") if isinstance(p.get("hd_profile_pic_url_info"), dict) else None
-    pic = pic or p.get("profile_pic_url_hd") or p.get("profile_pic_url")
-    return _norm_result(p.get("username") or username, p.get("full_name"),
-                        pic, p.get("is_verified", False), p.get("biography"))
+    return _norm_result(p.get("username") or username, p.get("full_name"), _pick_pic(p),
+                        p.get("is_verified", False), p.get("biography"))
 
 
-async def _provider_looter2(username: str, key: str) -> dict:
+async def _provider_looter2(username, key):
     host = "instagram-looter2.p.rapidapi.com"
-    url = f"https://{host}/profile"
     headers = {"x-rapidapi-host": host, "x-rapidapi-key": key}
     async with httpx.AsyncClient(timeout=20.0) as cx:
-        r = await cx.get(url, params={"username": username}, headers=headers)
+        r = await cx.get(f"https://{host}/profile", params={"username": username}, headers=headers)
         if r.status_code != 200:
-            logger.warning(f"[looter2] {r.status_code}: {r.text[:160]}")
             return {}
         data = r.json()
     if not isinstance(data, dict):
         return {}
-    pic = data.get("profile_pic_url_hd") or data.get("profile_pic_url")
-    return _norm_result(data.get("username") or username, data.get("full_name"),
-                        pic, data.get("is_verified", False), data.get("biography"))
+    return _norm_result(data.get("username") or username, data.get("full_name"), _pick_pic(data),
+                        data.get("is_verified", False), data.get("biography"))
 
 
-async def _provider_public_web(username: str, _key: str) -> dict:
-    """Last-resort: Instagram's own web_profile_info endpoint. No key, often rate-limited."""
+async def _provider_public_web(username, _key):
     url = "https://i.instagram.com/api/v1/users/web_profile_info/"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
-                      "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
-        "x-ig-app-id": "936619743392459",
-        "Accept": "*/*",
-    }
+    headers = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+               "x-ig-app-id": "936619743392459", "Accept": "*/*"}
     async with httpx.AsyncClient(timeout=15.0) as cx:
         r = await cx.get(url, params={"username": username}, headers=headers)
         if r.status_code != 200:
-            logger.warning(f"[public-web] {r.status_code}")
             return {}
         try:
             data = r.json()
@@ -262,23 +335,17 @@ async def _provider_public_web(username: str, _key: str) -> dict:
     user = (((data or {}).get("data") or {}).get("user")) or {}
     if not user:
         return {}
-    pic = user.get("profile_pic_url_hd") or user.get("profile_pic_url")
-    return _norm_result(user.get("username") or username, user.get("full_name"),
-                        pic, user.get("is_verified", False), user.get("biography"))
+    return _norm_result(user.get("username") or username, user.get("full_name"), _pick_pic(user),
+                        user.get("is_verified", False), user.get("biography"))
 
 
-# Order matters: first hit wins. User-configurable via SCRAPER_ORDER env (comma sep).
-ALL_PROVIDERS = {
-    "fast_reliable": _provider_fast_reliable,
-    "scraper2":      _provider_scraper2,
-    "looter2":       _provider_looter2,
-    "public":        _provider_public_web,
-}
-DEFAULT_ORDER = "fast_reliable,scraper2,looter2,public"
+ALL_PROVIDERS = {"cheapest": _provider_cheapest, "media_api": _provider_media_api,
+    "profile1": _provider_profile1, "scraper_stable": _provider_scraper_stable,
+    "scraper2": _provider_scraper2, "looter2": _provider_looter2, "public": _provider_public_web}
+DEFAULT_ORDER = "cheapest,media_api,profile1,scraper_stable,scraper2,looter2,public"
 
 
-async def fetch_instagram_profile(username: str) -> dict:
-    """Try providers in order, return the first one with a non-empty result."""
+async def fetch_instagram_profile(username):
     key = os.environ.get("RAPIDAPI_KEY", "")
     order = [x.strip() for x in os.environ.get("SCRAPER_ORDER", DEFAULT_ORDER).split(",") if x.strip()]
     last_err = None
@@ -299,10 +366,6 @@ async def fetch_instagram_profile(username: str) -> dict:
     logger.warning(f"All providers failed for {username}; last_err={last_err}")
     return {}
 
-
-# ============================================================
-# Auth
-# ============================================================
 
 @api_router.post("/auth/login")
 async def login(payload: LoginIn, response: Response):
@@ -327,14 +390,16 @@ async def me(user: dict = Depends(get_current_user)):
     return user
 
 
-# ============================================================
-# Categories
-# ============================================================
+def _sys_cats_payload():
+    return [{"id": c["id"], "name": c["name"], "system": True, "kind": c["kind"]} for c in SYS_CATEGORIES]
+
 
 @api_router.get("/categories")
 async def list_categories(user: dict = Depends(get_current_user)):
+    sys_cats = _sys_cats_payload()
     cursor = db.categories.find({"user_id": user["id"]}).sort("created_at", 1)
-    return [{"id": c["id"], "name": c["name"]} async for c in cursor]
+    user_cats = [{"id": c["id"], "name": c["name"], "system": False} async for c in cursor]
+    return sys_cats + user_cats
 
 
 @api_router.post("/categories")
@@ -342,34 +407,44 @@ async def create_category(payload: CategoryIn, user: dict = Depends(get_current_
     name = payload.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Name required")
+    if name.lower() in {c["name"].lower() for c in SYS_CATEGORIES}:
+        raise HTTPException(status_code=400, detail="That name is reserved")
     existing = await db.categories.find_one({"user_id": user["id"], "name": name})
     if existing:
-        return {"id": existing["id"], "name": existing["name"]}
+        return {"id": existing["id"], "name": existing["name"], "system": False}
     cat = Category(name=name, user_id=user["id"])
     await db.categories.insert_one(cat.model_dump())
-    return {"id": cat.id, "name": cat.name}
+    return {"id": cat.id, "name": cat.name, "system": False}
 
 
 @api_router.delete("/categories/{cat_id}")
 async def delete_category(cat_id: str, user: dict = Depends(get_current_user)):
+    if cat_id in SYS_IDS:
+        raise HTTPException(status_code=400, detail="System categories cannot be deleted")
     await db.categories.delete_one({"id": cat_id, "user_id": user["id"]})
     await db.profiles.update_many({"user_id": user["id"], "category_ids": cat_id},
                                   {"$pull": {"category_ids": cat_id}})
     return {"ok": True}
 
 
-# ============================================================
-# Profiles
-# ============================================================
+def _profile_out(p):
+    return {"id": p["id"], "username": p["username"], "full_name": p.get("full_name", ""),
+            "profile_pic_url": p.get("profile_pic_url", ""), "is_verified": p.get("is_verified", False),
+            "bio": p.get("bio", ""), "category_ids": p.get("category_ids", []),
+            "pic_source": p.get("pic_source", "fetched")}
 
-def _profile_out(p: dict) -> dict:
-    return {
-        "id": p["id"], "username": p["username"],
-        "full_name": p.get("full_name", ""), "profile_pic_url": p.get("profile_pic_url", ""),
-        "is_verified": p.get("is_verified", False), "bio": p.get("bio", ""),
-        "category_ids": p.get("category_ids", []),
-        "pic_source": p.get("pic_source", "fetched"),
-    }
+
+def _enforce_mutex(category_ids, previous_ids=None):
+    ids = list(dict.fromkeys(category_ids or []))
+    if SYS_ACTIVE in ids and SYS_COMPLETE in ids:
+        prev = set(previous_ids or [])
+        if SYS_ACTIVE not in prev and SYS_COMPLETE in prev:
+            ids = [i for i in ids if i != SYS_COMPLETE]
+        elif SYS_COMPLETE not in prev and SYS_ACTIVE in prev:
+            ids = [i for i in ids if i != SYS_ACTIVE]
+        else:
+            ids = [i for i in ids if i != SYS_COMPLETE]
+    return ids
 
 
 @api_router.get("/profiles")
@@ -383,22 +458,20 @@ async def add_profile(payload: ProfileIn, user: dict = Depends(get_current_user)
     username = extract_username(payload.url_or_username)
     if not username:
         raise HTTPException(status_code=400, detail="Could not extract a valid Instagram username")
-
     existing = await db.profiles.find_one({"user_id": user["id"],
         "username": {"$regex": f"^{re.escape(username)}$", "$options": "i"}})
     if existing:
-        new_cats = list({*existing.get("category_ids", []), *payload.category_ids})
+        new_cats = _enforce_mutex(list({*existing.get("category_ids", []), *payload.category_ids}),
+                                   existing.get("category_ids", []))
         await db.profiles.update_one({"_id": existing["_id"]}, {"$set": {"category_ids": new_cats}})
         out = _profile_out({**existing, "category_ids": new_cats})
         out["duplicate"] = True
         return out
-
     fetched = await fetch_instagram_profile(username)
-    profile = Profile(
-        username=fetched.get("username") or username,
+    profile = Profile(username=fetched.get("username") or username,
         full_name=fetched.get("full_name", ""), profile_pic_url=fetched.get("profile_pic_url", ""),
         is_verified=fetched.get("is_verified", False), bio=fetched.get("bio", ""),
-        category_ids=payload.category_ids, user_id=user["id"],
+        category_ids=_enforce_mutex(payload.category_ids), user_id=user["id"],
         pic_source="fetched" if fetched.get("profile_pic_url") else "none")
     await db.profiles.insert_one(profile.model_dump())
     return _profile_out(profile.model_dump())
@@ -406,15 +479,16 @@ async def add_profile(payload: ProfileIn, user: dict = Depends(get_current_user)
 
 @api_router.patch("/profiles/{pid}")
 async def update_profile(pid: str, payload: ProfileUpdate, user: dict = Depends(get_current_user)):
+    p = await db.profiles.find_one({"id": pid, "user_id": user["id"]})
+    if not p:
+        raise HTTPException(status_code=404, detail="Profile not found")
     update = {}
     if payload.category_ids is not None:
-        update["category_ids"] = payload.category_ids
+        update["category_ids"] = _enforce_mutex(payload.category_ids, p.get("category_ids", []))
     if not update:
-        return {"ok": True}
-    res = await db.profiles.update_one({"id": pid, "user_id": user["id"]}, {"$set": update})
-    if res.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Profile not found")
-    return {"ok": True}
+        return _profile_out(p)
+    await db.profiles.update_one({"id": pid, "user_id": user["id"]}, {"$set": update})
+    return _profile_out({**p, **update})
 
 
 @api_router.post("/profiles/{pid}/refresh")
@@ -422,12 +496,9 @@ async def refresh_profile(pid: str, user: dict = Depends(get_current_user)):
     p = await db.profiles.find_one({"id": pid, "user_id": user["id"]})
     if not p:
         raise HTTPException(status_code=404, detail="Profile not found")
-
     fetched = await fetch_instagram_profile(p["username"])
     if not fetched:
         raise HTTPException(status_code=502, detail="All scrapers failed. Try a manual picture or come back later.")
-
-    # Only overwrite fields where the fetched value is non-empty. NEVER trash a manual picture.
     new_data = {}
     if fetched.get("full_name"):
         new_data["full_name"] = fetched["full_name"]
@@ -435,18 +506,14 @@ async def refresh_profile(pid: str, user: dict = Depends(get_current_user)):
         new_data["bio"] = fetched["bio"]
     if "is_verified" in fetched:
         new_data["is_verified"] = bool(fetched["is_verified"])
-
     is_manual = p.get("pic_source") == "manual"
     got_pic = bool(fetched.get("profile_pic_url"))
     if got_pic and not is_manual:
         new_data["profile_pic_url"] = fetched["profile_pic_url"]
         new_data["pic_source"] = "fetched"
-
     if new_data:
         await db.profiles.update_one({"id": pid, "user_id": user["id"]}, {"$set": new_data})
-
-    merged = {**p, **new_data}
-    return _profile_out(merged)
+    return _profile_out({**p, **new_data})
 
 
 @api_router.post("/profiles/{pid}/picture/url")
@@ -454,19 +521,11 @@ async def set_picture_url(pid: str, payload: PictureUrlIn, user: dict = Depends(
     p = await db.profiles.find_one({"id": pid, "user_id": user["id"]})
     if not p:
         raise HTTPException(status_code=404, detail="Profile not found")
-
     old_pid = p.get("pic_public_id")
     if old_pid:
-        try:
-            cloudinary.uploader.destroy(old_pid, invalidate=True)
-        except Exception as e:
-            logger.warning(f"Cloudinary destroy failed for {old_pid}: {e}")
-
-    new_data = {
-        "profile_pic_url": str(payload.url),
-        "pic_source": "manual",
-        "pic_public_id": None,
-    }
+        try: cloudinary.uploader.destroy(old_pid, invalidate=True)
+        except Exception as e: logger.warning(f"Cloudinary destroy failed: {e}")
+    new_data = {"profile_pic_url": str(payload.url), "pic_source": "manual", "pic_public_id": None}
     await db.profiles.update_one({"id": pid, "user_id": user["id"]}, {"$set": new_data})
     return _profile_out({**p, **new_data})
 
@@ -475,41 +534,48 @@ async def set_picture_url(pid: str, payload: PictureUrlIn, user: dict = Depends(
 async def upload_picture(pid: str, file: UploadFile = File(...), user: dict = Depends(get_current_user)):
     if not os.environ.get("CLOUDINARY_CLOUD_NAME"):
         raise HTTPException(status_code=500, detail="Image storage is not configured (CLOUDINARY_* env vars missing).")
-
     p = await db.profiles.find_one({"id": pid, "user_id": user["id"]})
     if not p:
         raise HTTPException(status_code=404, detail="Profile not found")
-
     ct = (file.content_type or "").lower()
     if ct not in ALLOWED_IMAGE_MIME:
         raise HTTPException(status_code=400, detail=f"Unsupported image type: {ct}")
-
     data = await file.read()
     if not data:
         raise HTTPException(status_code=400, detail="Empty file")
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=400, detail="File too large (max 5 MB)")
-
     folder = f"rolodex/users/{user['id']}"
     try:
-        result = cloudinary.uploader.upload(
-            data,
-            folder=folder,
-            public_id=p["id"],
-            overwrite=True,
-            resource_type="image",
-            transformation=[{"width": 512, "height": 512, "crop": "fill",
-                             "gravity": "face", "quality": "auto", "fetch_format": "auto"}],
-        )
+        result = cloudinary.uploader.upload(data, folder=folder, public_id=p["id"], overwrite=True,
+            resource_type="image", transformation=[{"width": 512, "height": 512, "crop": "fill",
+                "gravity": "face", "quality": "auto", "fetch_format": "auto"}])
     except Exception as e:
         logger.exception("Cloudinary upload failed")
         raise HTTPException(status_code=502, detail=f"Upload failed: {e}")
+    new_data = {"profile_pic_url": result.get("secure_url"), "pic_public_id": result.get("public_id"),
+                "pic_source": "manual"}
+    await db.profiles.update_one({"id": pid, "user_id": user["id"]}, {"$set": new_data})
+    return _profile_out({**p, **new_data})
 
-    new_data = {
-        "profile_pic_url": result.get("secure_url"),
-        "pic_public_id": result.get("public_id"),
-        "pic_source": "manual",
-    }
+
+@api_router.delete("/profiles/{pid}/picture")
+async def remove_picture(pid: str, user: dict = Depends(get_current_user)):
+    p = await db.profiles.find_one({"id": pid, "user_id": user["id"]})
+    if not p:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    old_pid = p.get("pic_public_id")
+    if old_pid:
+        try: cloudinary.uploader.destroy(old_pid, invalidate=True)
+        except Exception as e: logger.warning(f"Cloudinary destroy failed: {e}")
+    new_data = {"profile_pic_url": "", "pic_public_id": None, "pic_source": "none"}
+    try:
+        fetched = await fetch_instagram_profile(p["username"])
+        if fetched.get("profile_pic_url"):
+            new_data["profile_pic_url"] = fetched["profile_pic_url"]
+            new_data["pic_source"] = "fetched"
+    except Exception as e:
+        logger.warning(f"Re-fetch after remove failed: {e}")
     await db.profiles.update_one({"id": pid, "user_id": user["id"]}, {"$set": new_data})
     return _profile_out({**p, **new_data})
 
@@ -518,26 +584,33 @@ async def upload_picture(pid: str, file: UploadFile = File(...), user: dict = De
 async def delete_profile(pid: str, user: dict = Depends(get_current_user)):
     p = await db.profiles.find_one({"id": pid, "user_id": user["id"]})
     if p and p.get("pic_public_id"):
-        try:
-            cloudinary.uploader.destroy(p["pic_public_id"], invalidate=True)
-        except Exception as e:
-            logger.warning(f"Cloudinary destroy failed: {e}")
+        try: cloudinary.uploader.destroy(p["pic_public_id"], invalidate=True)
+        except Exception as e: logger.warning(f"Cloudinary destroy failed: {e}")
     await db.profiles.delete_one({"id": pid, "user_id": user["id"]})
     return {"ok": True}
 
 
-async def _ensure_categories(user_id: str, names: List[str]) -> dict:
+async def _ensure_categories(user_id, names):
     names = [n.strip() for n in names if n and n.strip()]
     if not names:
         return {}
+    sys_by_name_lower = {c["name"].lower(): c["id"] for c in SYS_CATEGORIES}
     existing = {}
-    async for c in db.categories.find({"user_id": user_id, "name": {"$in": names}}):
-        existing[c["name"]] = c["id"]
-    for name in names:
-        if name not in existing:
-            cat = Category(name=name, user_id=user_id)
-            await db.categories.insert_one(cat.model_dump())
-            existing[name] = cat.id
+    user_names = []
+    for n in names:
+        sid = sys_by_name_lower.get(n.lower())
+        if sid:
+            existing[n] = sid
+        else:
+            user_names.append(n)
+    if user_names:
+        async for c in db.categories.find({"user_id": user_id, "name": {"$in": user_names}}):
+            existing[c["name"]] = c["id"]
+        for name in user_names:
+            if name not in existing:
+                cat = Category(name=name, user_id=user_id)
+                await db.categories.insert_one(cat.model_dump())
+                existing[name] = cat.id
     return existing
 
 
@@ -546,7 +619,6 @@ async def bulk_add_profiles(payload: BulkIn, user: dict = Depends(get_current_us
     results = []
     all_names = list({n for item in payload.items for n in item.category_names})
     name_to_id = await _ensure_categories(user["id"], all_names)
-
     for item in payload.items:
         username = extract_username(item.url_or_username)
         if not username:
@@ -556,17 +628,17 @@ async def bulk_add_profiles(payload: BulkIn, user: dict = Depends(get_current_us
         existing = await db.profiles.find_one({"user_id": user["id"],
             "username": {"$regex": f"^{re.escape(username)}$", "$options": "i"}})
         if existing:
-            new_cats = list({*existing.get("category_ids", []), *cat_ids})
+            new_cats = _enforce_mutex(list({*existing.get("category_ids", []), *cat_ids}),
+                                       existing.get("category_ids", []))
             await db.profiles.update_one({"_id": existing["_id"]}, {"$set": {"category_ids": new_cats}})
             results.append({"input": item.url_or_username, "status": "merged",
                             "username": existing["username"], "id": existing["id"]})
             continue
         fetched = await fetch_instagram_profile(username)
-        profile = Profile(
-            username=fetched.get("username") or username,
+        profile = Profile(username=fetched.get("username") or username,
             full_name=fetched.get("full_name", ""), profile_pic_url=fetched.get("profile_pic_url", ""),
             is_verified=fetched.get("is_verified", False), bio=fetched.get("bio", ""),
-            category_ids=cat_ids, user_id=user["id"],
+            category_ids=_enforce_mutex(cat_ids), user_id=user["id"],
             pic_source="fetched" if fetched.get("profile_pic_url") else "none")
         await db.profiles.insert_one(profile.model_dump())
         results.append({"input": item.url_or_username, "status": "added",
@@ -581,10 +653,8 @@ async def img_proxy(url: str):
         raise HTTPException(status_code=400, detail="Invalid url")
     if "res.cloudinary.com" in url:
         return Response(status_code=302, headers={"Location": url})
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-        "Referer": "https://www.instagram.com/",
-    }
+    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+               "Referer": "https://www.instagram.com/"}
     try:
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as cx:
             r = await cx.get(url, headers=headers)
@@ -615,13 +685,12 @@ async def on_startup():
     if admin_email and admin_password:
         existing = await db.users.find_one({"email": admin_email})
         if not existing:
-            await db.users.insert_one({
-                "email": admin_email, "password_hash": hash_password(admin_password),
-                "role": "admin", "created_at": datetime.now(timezone.utc).isoformat(),
-            })
+            await db.users.insert_one({"email": admin_email,
+                "password_hash": hash_password(admin_password), "role": "admin",
+                "created_at": datetime.now(timezone.utc).isoformat()})
         elif not verify_password(admin_password, existing["password_hash"]):
             await db.users.update_one({"email": admin_email},
-                                       {"$set": {"password_hash": hash_password(admin_password)}})
+                {"$set": {"password_hash": hash_password(admin_password)}})
 
 
 @app.on_event("shutdown")
