@@ -235,9 +235,9 @@ export default function Dashboard() {
   );
 }
 
-function CatTab({ active, onClick, label, count, testid, onDelete }) {
+function CatTab({ active, onClick, label, count, testid, onDelete, system }) {
   return (
-    <div className={`group inline-flex items-center font-display uppercase tracking-wider text-sm font-bold rounded-sm border transition-colors ${active ? "bg-[#0076B6] border-[#0076B6] text-white" : "bg-transparent border-slate-700 text-slate-400 hover:border-[#B0B7BC] hover:text-white"}`}>
+    <div className={`group inline-flex items-center font-display uppercase tracking-wider text-sm font-bold rounded-sm border transition-colors ${active ? "bg-[#0076B6] border-[#0076B6] text-white" : system ? "bg-transparent border-slate-300/40 text-slate-200/90 hover:border-slate-100 hover:text-white" : "bg-transparent border-slate-700 text-slate-400 hover:border-[#B0B7BC] hover:text-white"}`}>
       <button data-testid={testid} onClick={onClick} className="px-3 py-1.5 inline-flex items-center gap-2">
         <span>{label}</span>
         <span className={`font-mono text-[10px] ${active ? "text-white/80" : "text-slate-500"}`}>{count}</span>
