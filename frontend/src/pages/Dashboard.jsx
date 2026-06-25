@@ -183,10 +183,10 @@ export default function Dashboard() {
         <div className="flex flex-col lg:flex-row lg:items-center gap-3 mb-6 border-b border-slate-700 pb-3">
           <div className="flex items-center gap-2 flex-wrap flex-1">
             <CatTab active={activeCat === "all"} onClick={() => setActiveCat("all")} label="All" count={profiles.length} testid="cat-tab-all" />
-            {categories.map((c) => {
-              const count = profiles.filter((p) => (p.category_ids || []).includes(c.id)).length;
-              return <CatTab key={c.id} active={activeCat === c.id} onClick={() => setActiveCat(c.id)} label={c.name} count={count} testid={`cat-tab-${c.name}`} onDelete={() => deleteCategory(c.id)} />;
-            })}
+          {categories.map((c) => {
+  const count = profiles.filter((p) => (p.category_ids || []).includes(c.id)).length;
+  return <CatTab key={c.id} active={activeCat === c.id} onClick={() => setActiveCat(c.id)} label={c.name} count={count} testid={`cat-tab-${c.name}`} onDelete={c.system ? null : () => deleteCategory(c.id)} system={c.system} />;  
+})}
             <Dialog open={catDialogOpen} onOpenChange={setCatDialogOpen}>
               <DialogTrigger asChild>
                 <button data-testid="new-category-button" className="font-mono text-[10px] uppercase tracking-wider text-slate-400 px-3 py-1.5 rounded-sm border border-dashed border-slate-600 hover:border-[#0076B6] hover:text-[#0076B6] inline-flex items-center gap-1">
