@@ -124,6 +124,8 @@ class FavPicture(BaseModel):
 
 class ProfileUpdate(BaseModel):
     category_ids: Optional[List[str]] = None
+    full_name: Optional[str] = None
+    home_address: Optional[str] = None
     alt_instagrams: Optional[List[str]] = None
     phones: Optional[List[str]] = None
     emails: Optional[List[str]] = None
@@ -154,6 +156,7 @@ class Profile(BaseModel):
     alt_instagrams: List[str] = []
     phones: List[str] = []
     emails: List[str] = []
+    home_address: Optional[str] = None
     socials: Dict[str, Optional[str]] = {}
     notes: Optional[str] = None
     fav_pictures: List[dict] = []
@@ -473,6 +476,7 @@ def _profile_out(p):
         "alt_instagrams": p.get("alt_instagrams", []),
         "phones": p.get("phones", []),
         "emails": p.get("emails", []),
+        "home_address": p.get("home_address", None),
         "socials": p.get("socials", {}),
         "notes": p.get("notes", None),
         "fav_pictures": p.get("fav_pictures", []),
@@ -530,6 +534,10 @@ async def update_profile(pid: str, payload: ProfileUpdate, user: dict = Depends(
     update = {}
     if payload.category_ids is not None:
         update["category_ids"] = _enforce_mutex(payload.category_ids, p.get("category_ids", []))
+    if payload.full_name is not None:
+        update["full_name"] = payload.full_name.strip()
+    if payload.home_address is not None:
+        update["home_address"] = payload.home_address.strip() or None
     if payload.alt_instagrams is not None:
         update["alt_instagrams"] = [u.strip().lstrip("@") for u in payload.alt_instagrams if u.strip()]
     if payload.phones is not None:
@@ -539,7 +547,7 @@ async def update_profile(pid: str, payload: ProfileUpdate, user: dict = Depends(
     if payload.socials is not None:
         update["socials"] = {k: v for k, v in payload.socials.model_dump().items() if v is not None}
     if payload.notes is not None:
-        update["notes"] = payload.notes
+        update["notes"] = payload.notes.strip() or None
     if not update:
         return _profile_out(p)
     await db.profiles.update_one({"id": pid, "user_id": user["id"]}, {"$set": update})
