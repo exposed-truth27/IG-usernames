@@ -3,14 +3,39 @@ import { useAuth } from "@/contexts/AuthContext";
 import { api, formatApiError } from "@/lib/api";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
+  DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import ProfileCard from "@/components/ProfileCard";
 import BulkImportDialog from "@/components/BulkImportDialog";
 import CopyDialog from "@/components/CopyDialog";
-import { Copy, Download, LogOut, Plus, Search, ShieldCheck, Trash2, Upload } from "lucide-react";
+import { ArrowDownAZ, ArrowUpAZ, ArrowDownUp, Copy, Download, LogOut, Plus, Search, ShieldCheck, Trash2, Upload, Clock, Clock3 } from "lucide-react";
 import { toast } from "sonner";
+
+const SORT_OPTIONS = [
+  { key: "newest",  label: "Newest First",    icon: Clock,      desc: "Added most recently" },
+  { key: "oldest",  label: "Oldest First",    icon: Clock3,     desc: "Added longest ago" },
+  { key: "az",      label: "A → Z",           icon: ArrowDownAZ, desc: "Alphabetical ascending" },
+  { key: "za",      label: "Z → A",           icon: ArrowUpAZ,  desc: "Alphabetical descending" },
+];
+
+function sortProfiles(list, sortKey) {
+  const copy = [...list];
+  switch (sortKey) {
+    case "az":
+      return copy.sort((a, b) => (a.username || "").localeCompare(b.username || "", undefined, { sensitivity: "base" }));
+    case "za":
+      return copy.sort((a, b) => (b.username || "").localeCompare(a.username || "", undefined, { sensitivity: "base" }));
+    case "oldest":
+      return copy.sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
+    case "newest":
+    default:
+      return copy.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+  }
+}
 
 export default function Dashboard() {
   const { user, logout } = useAuth();
@@ -18,6 +43,7 @@ export default function Dashboard() {
   const [categories, setCategories] = useState([]);
   const [activeCat, setActiveCat] = useState("all");
   const [search, setSearch] = useState("");
+  const [sortKey, setSortKey] = useState("newest");
   const [pasteValue, setPasteValue] = useState("");
   const [extracting, setExtracting] = useState(false);
   const [newCatName, setNewCatName] = useState("");
@@ -77,10 +103,16 @@ export default function Dashboard() {
     if (activeCat !== "all") list = list.filter((p) => (p.category_ids || []).includes(activeCat));
     if (search.trim()) {
       const q = search.toLowerCase();
-      list = list.filter((p) => p.username.toLowerCase().includes(q) || (p.full_name || "").toLowerCase().includes(q));
+      list = list.filter((p) =>
+        p.username.toLowerCase().includes(q) ||
+        (p.full_name || "").toLowerCase().includes(q) ||
+        (p.alt_instagrams || []).some((u) => u.toLowerCase().includes(q)) ||
+        (p.phones || []).some((ph) => ph.includes(q)) ||
+        (p.emails || []).some((em) => em.toLowerCase().includes(q))
+      );
     }
-    return list;
-  }, [profiles, activeCat, search]);
+    return sortProfiles(list, sortKey);
+  }, [profiles, activeCat, search, sortKey]);
 
   const exportJson = () => {
     const data = {
@@ -88,6 +120,11 @@ export default function Dashboard() {
       categories,
       profiles: profiles.map((p) => ({
         username: p.username, full_name: p.full_name, is_verified: p.is_verified,
+        alt_instagrams: p.alt_instagrams || [],
+        phones: p.phones || [],
+        emails: p.emails || [],
+        socials: p.socials || {},
+        notes: p.notes || "",
         categories: (p.category_ids || []).map((id) => categories.find((c) => c.id === id)?.name).filter(Boolean),
       })),
     };
@@ -104,6 +141,9 @@ export default function Dashboard() {
       setProfiles(p.data); setCategories(c.data);
     } catch { toast.error("Reload failed"); }
   };
+
+  const activeSortOption = SORT_OPTIONS.find((o) => o.key === sortKey) || SORT_OPTIONS[0];
+  const SortIcon = activeSortOption.icon;
 
   return (
     <div className="min-h-screen bg-slate-900 bg-field-grid">
@@ -180,13 +220,14 @@ export default function Dashboard() {
           </div>
         </div>
 
+        {/* Category tabs + search + sort */}
         <div className="flex flex-col lg:flex-row lg:items-center gap-3 mb-6 border-b border-slate-700 pb-3">
           <div className="flex items-center gap-2 flex-wrap flex-1">
             <CatTab active={activeCat === "all"} onClick={() => setActiveCat("all")} label="All" count={profiles.length} testid="cat-tab-all" />
-          {categories.map((c) => {
-  const count = profiles.filter((p) => (p.category_ids || []).includes(c.id)).length;
-  return <CatTab key={c.id} active={activeCat === c.id} onClick={() => setActiveCat(c.id)} label={c.name} count={count} testid={`cat-tab-${c.name}`} onDelete={c.system ? null : () => deleteCategory(c.id)} system={c.system} />;  
-})}
+            {categories.map((c) => {
+              const count = profiles.filter((p) => (p.category_ids || []).includes(c.id)).length;
+              return <CatTab key={c.id} active={activeCat === c.id} onClick={() => setActiveCat(c.id)} label={c.name} count={count} testid={`cat-tab-${c.name}`} onDelete={c.system ? null : () => deleteCategory(c.id)} system={c.system} />;
+            })}
             <Dialog open={catDialogOpen} onOpenChange={setCatDialogOpen}>
               <DialogTrigger asChild>
                 <button data-testid="new-category-button" className="font-mono text-[10px] uppercase tracking-wider text-slate-400 px-3 py-1.5 rounded-sm border border-dashed border-slate-600 hover:border-[#0076B6] hover:text-[#0076B6] inline-flex items-center gap-1">
@@ -204,13 +245,56 @@ export default function Dashboard() {
               </DialogContent>
             </Dialog>
           </div>
-          <div className="relative lg:w-64">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-            <Input data-testid="search-input" value={search} onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search handles…" className="pl-9 bg-slate-900 border-slate-600 rounded-sm h-9 focus-visible:ring-[#0076B6] font-mono text-sm" />
+
+          {/* Search + Sort controls */}
+          <div className="flex items-center gap-2">
+            <div className="relative lg:w-56">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+              <Input data-testid="search-input" value={search} onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search handles…" className="pl-9 bg-slate-900 border-slate-600 rounded-sm h-9 focus-visible:ring-[#0076B6] font-mono text-sm" />
+            </div>
+
+            {/* Sort dropdown */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  data-testid="sort-button"
+                  className="h-9 rounded-sm border-slate-600 bg-transparent text-[#B0B7BC] hover:bg-slate-800 hover:text-white gap-1.5 font-mono text-[10px] uppercase tracking-wider shrink-0"
+                  title={`Sort: ${activeSortOption.label}`}
+                >
+                  <SortIcon className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">{activeSortOption.label}</span>
+                  <ArrowDownUp className="w-3 h-3 opacity-50 sm:hidden" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="bg-slate-800 border-slate-700 rounded-sm w-48">
+                <DropdownMenuLabel className="font-mono text-[10px] uppercase tracking-[0.2em] text-slate-400">Sort Order</DropdownMenuLabel>
+                <DropdownMenuSeparator className="bg-slate-700" />
+                {SORT_OPTIONS.map((opt) => {
+                  const Icon = opt.icon;
+                  return (
+                    <DropdownMenuItem
+                      key={opt.key}
+                      data-testid={`sort-${opt.key}`}
+                      onClick={() => setSortKey(opt.key)}
+                      className={`flex items-center gap-2 text-sm cursor-pointer focus:bg-[#0076B6]/20 focus:text-white ${sortKey === opt.key ? "text-[#7cc6e8] bg-[#0076B6]/10" : "text-slate-300"}`}
+                    >
+                      <Icon className="w-3.5 h-3.5 shrink-0" />
+                      <div>
+                        <div className="font-mono text-[11px] uppercase tracking-wider">{opt.label}</div>
+                        <div className="text-[10px] text-slate-500">{opt.desc}</div>
+                      </div>
+                      {sortKey === opt.key && <span className="ml-auto text-[#0076B6]">✓</span>}
+                    </DropdownMenuItem>
+                  );
+                })}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
 
+        {/* Profile grid */}
         {filtered.length === 0 ? (
           <div data-testid="empty-state" className="border border-dashed border-slate-700 rounded-sm py-20 text-center">
             <div className="font-mono text-[10px] uppercase tracking-[0.3em] text-[#B0B7BC] mb-3">Empty Roster</div>
@@ -256,7 +340,7 @@ function CatTab({ active, onClick, label, count, testid, onDelete, system }) {
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel className="rounded-sm bg-slate-700 border-slate-600 hover:bg-slate-600">Cancel</AlertDialogCancel>
-              <AlertDialogAction onClick={onDelete} className="rounded-sm bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+              <AlertDialogAction onClick={onDelete} className="rounded-sm bg-red-600 hover:bg-red-700 text-white border-0">Delete</AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
