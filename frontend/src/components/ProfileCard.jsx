@@ -96,6 +96,8 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
   // Edit panel state
   const [editOpen, setEditOpen] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
+  const [editRealName, setEditRealName] = useState("");
+  const [editHomeAddress, setEditHomeAddress] = useState("");
   const [editAltIg, setEditAltIg] = useState([]);
   const [editPhones, setEditPhones] = useState([]);
   const [editEmails, setEditEmails] = useState([]);
@@ -223,6 +225,8 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
 
   // ── Edit panel ──────────────────────────────────────────────────────────────
   const openEdit = () => {
+    setEditRealName(profile.full_name || "");
+    setEditHomeAddress(profile.home_address || "");
     setEditAltIg([...altInstagrams]);
     setEditPhones([...phones]);
     setEditEmails([...emails]);
@@ -235,6 +239,8 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
     setEditSaving(true);
     try {
       const { data } = await api.patch(`/profiles/${profile.id}`, {
+        full_name: editRealName,
+        home_address: editHomeAddress,
         alt_instagrams: editAltIg,
         phones: editPhones,
         emails: editEmails,
@@ -402,7 +408,7 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
           className="mt-4 font-display font-bold text-lg text-white tracking-tight hover:text-[#0076B6] inline-flex items-center gap-1.5">
           @{profile.username} <ExternalLink className="w-3.5 h-3.5 opacity-60" />
         </a>
-        {profile.full_name && <div className="mt-1 text-sm text-slate-400 line-clamp-1">{profile.full_name}</div>}
+        {profile.full_name && <div className="mt-1 text-sm text-white font-semibold line-clamp-1">{profile.full_name}</div>}
         {profile.bio && <div className="mt-2 text-xs text-slate-500 line-clamp-2 leading-relaxed">{profile.bio}</div>}
       </div>
 
@@ -600,6 +606,33 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
           </DialogHeader>
 
           <div className="space-y-6 py-2">
+            {/* Real Name */}
+            <div>
+              <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-2 block">
+                Real Name
+              </label>
+              <Input
+                value={editRealName}
+                onChange={(e) => setEditRealName(e.target.value)}
+                placeholder="Full name or display name"
+                className="bg-slate-900 border-slate-600 rounded-sm h-9 text-sm focus-visible:ring-[#0076B6] font-mono"
+              />
+            </div>
+
+            {/* Home Address */}
+            <div>
+              <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-2 block">
+                Home Address
+              </label>
+              <Textarea
+                value={editHomeAddress}
+                onChange={(e) => setEditHomeAddress(e.target.value)}
+                placeholder="Street, City, State, ZIP"
+                rows={2}
+                className="bg-slate-900 border-slate-600 rounded-sm text-sm focus-visible:ring-[#0076B6] font-mono resize-none"
+              />
+            </div>
+
             {/* Alt Instagram accounts */}
             <ListEditor
               label="Alt Instagram Accounts"
