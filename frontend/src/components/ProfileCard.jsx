@@ -15,6 +15,10 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 
 const SYS_FAV = "__sys_favorite";
@@ -114,6 +118,7 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
 
   // Social links expand
   const [socialsExpanded, setSocialsExpanded] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
 
   const initials = (profile.username || "?").slice(0, 2).toUpperCase();
   const igUrl = `https://instagram.com/${profile.username}`;
@@ -167,8 +172,12 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
   };
 
   const removeProfile = async () => {
-    try { await api.delete(`/profiles/${profile.id}`); onDelete(profile.id); }
-    catch { toast.error("Delete failed"); }
+    try {
+      await api.delete(`/profiles/${profile.id}`);
+      onDelete(profile.id);
+      toast.success(`@${profile.username} removed`);
+    } catch { toast.error("Delete failed"); }
+    finally { setDeleteConfirmOpen(false); }
   };
 
   const removePicture = async () => {
@@ -373,9 +382,27 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
           <button data-testid={`refresh-${profile.username}`} onClick={refresh} disabled={busy} className="p-1.5 text-slate-400 hover:text-[#0076B6] hover:bg-slate-700/60 rounded-sm" title="Refresh from Instagram">
             <RefreshCw className={`w-3.5 h-3.5 ${busy ? "animate-spin" : ""}`} />
           </button>
-          <button data-testid={`delete-${profile.username}`} onClick={removeProfile} className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-slate-700/60 rounded-sm" title="Remove">
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
+          <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+            <AlertDialogTrigger asChild>
+              <button data-testid={`delete-${profile.username}`} className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-slate-700/60 rounded-sm" title="Remove profile">
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </AlertDialogTrigger>
+            <AlertDialogContent className="bg-slate-800 border-slate-700 rounded-sm">
+              <AlertDialogHeader>
+                <AlertDialogTitle className="font-display uppercase tracking-tight text-red-400">Delete @{profile.username}?</AlertDialogTitle>
+                <AlertDialogDescription className="text-slate-400">
+                  This will permanently remove this profile and all its data (photos, notes, contact info). This action cannot be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel className="rounded-sm bg-slate-700 border-slate-600 hover:bg-slate-600 text-slate-300">Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={removeProfile} className="rounded-sm bg-red-600 hover:bg-red-700 text-white border-0 font-display uppercase tracking-widest">
+                  Delete Profile
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       </div>
 
