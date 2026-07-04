@@ -106,6 +106,8 @@ export default function Dashboard() {
       list = list.filter((p) =>
         p.username.toLowerCase().includes(q) ||
         (p.full_name || "").toLowerCase().includes(q) ||
+        (p.home_address || "").toLowerCase().includes(q) ||
+        (p.notes || "").toLowerCase().includes(q) ||
         (p.alt_instagrams || []).some((u) => u.toLowerCase().includes(q)) ||
         (p.phones || []).some((ph) => ph.includes(q)) ||
         (p.emails || []).some((em) => em.toLowerCase().includes(q))
@@ -123,6 +125,7 @@ export default function Dashboard() {
         alt_instagrams: p.alt_instagrams || [],
         phones: p.phones || [],
         emails: p.emails || [],
+        home_address: p.home_address || "",
         socials: p.socials || {},
         notes: p.notes || "",
         categories: (p.category_ids || []).map((id) => categories.find((c) => c.id === id)?.name).filter(Boolean),
