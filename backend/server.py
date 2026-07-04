@@ -9,7 +9,7 @@ import re
 import uuid
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional, Annotated
+from typing import List, Optional, Annotated, Dict
 
 import bcrypt
 import jwt
@@ -107,11 +107,35 @@ class BulkItem(BaseModel):
 class BulkIn(BaseModel):
     items: List[BulkItem]
 
+class SocialsModel(BaseModel):
+    snapchat: Optional[str] = None
+    tiktok: Optional[str] = None
+    facebook: Optional[str] = None
+    twitter: Optional[str] = None
+    youtube: Optional[str] = None
+    threads: Optional[str] = None
+
+class FavPicture(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    url: str
+    caption: Optional[str] = None
+    public_id: Optional[str] = None
+    added_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
 class ProfileUpdate(BaseModel):
     category_ids: Optional[List[str]] = None
+    alt_instagrams: Optional[List[str]] = None
+    phones: Optional[List[str]] = None
+    emails: Optional[List[str]] = None
+    socials: Optional[SocialsModel] = None
+    notes: Optional[str] = None
 
 class PictureUrlIn(BaseModel):
     url: HttpUrl
+
+class FavPictureUrlIn(BaseModel):
+    url: HttpUrl
+    caption: Optional[str] = None
 
 class Profile(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -126,6 +150,13 @@ class Profile(BaseModel):
     pic_source: Optional[str] = "fetched"
     pic_public_id: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    # --- NEW FIELDS ---
+    alt_instagrams: List[str] = []
+    phones: List[str] = []
+    emails: List[str] = []
+    socials: Dict[str, Optional[str]] = {}
+    notes: Optional[str] = None
+    fav_pictures: List[dict] = []
 
 
 async def get_current_user(request: Request) -> dict:
@@ -428,10 +459,24 @@ async def delete_category(cat_id: str, user: dict = Depends(get_current_user)):
 
 
 def _profile_out(p):
-    return {"id": p["id"], "username": p["username"], "full_name": p.get("full_name", ""),
-            "profile_pic_url": p.get("profile_pic_url", ""), "is_verified": p.get("is_verified", False),
-            "bio": p.get("bio", ""), "category_ids": p.get("category_ids", []),
-            "pic_source": p.get("pic_source", "fetched")}
+    return {
+        "id": p["id"],
+        "username": p["username"],
+        "full_name": p.get("full_name", ""),
+        "profile_pic_url": p.get("profile_pic_url", ""),
+        "is_verified": p.get("is_verified", False),
+        "bio": p.get("bio", ""),
+        "category_ids": p.get("category_ids", []),
+        "pic_source": p.get("pic_source", "fetched"),
+        "created_at": p.get("created_at", ""),
+        # --- NEW FIELDS ---
+        "alt_instagrams": p.get("alt_instagrams", []),
+        "phones": p.get("phones", []),
+        "emails": p.get("emails", []),
+        "socials": p.get("socials", {}),
+        "notes": p.get("notes", None),
+        "fav_pictures": p.get("fav_pictures", []),
+    }
 
 
 def _enforce_mutex(category_ids, previous_ids=None):
@@ -485,6 +530,16 @@ async def update_profile(pid: str, payload: ProfileUpdate, user: dict = Depends(
     update = {}
     if payload.category_ids is not None:
         update["category_ids"] = _enforce_mutex(payload.category_ids, p.get("category_ids", []))
+    if payload.alt_instagrams is not None:
+        update["alt_instagrams"] = [u.strip().lstrip("@") for u in payload.alt_instagrams if u.strip()]
+    if payload.phones is not None:
+        update["phones"] = [ph.strip() for ph in payload.phones if ph.strip()]
+    if payload.emails is not None:
+        update["emails"] = [em.strip() for em in payload.emails if em.strip()]
+    if payload.socials is not None:
+        update["socials"] = {k: v for k, v in payload.socials.model_dump().items() if v is not None}
+    if payload.notes is not None:
+        update["notes"] = payload.notes
     if not update:
         return _profile_out(p)
     await db.profiles.update_one({"id": pid, "user_id": user["id"]}, {"$set": update})
@@ -580,12 +635,84 @@ async def remove_picture(pid: str, user: dict = Depends(get_current_user)):
     return _profile_out({**p, **new_data})
 
 
+# ─── Favorite Pictures ────────────────────────────────────────────────────────
+
+@api_router.get("/profiles/{pid}/fav-pictures")
+async def list_fav_pictures(pid: str, user: dict = Depends(get_current_user)):
+    p = await db.profiles.find_one({"id": pid, "user_id": user["id"]})
+    if not p:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return p.get("fav_pictures", [])
+
+
+@api_router.post("/profiles/{pid}/fav-pictures/url")
+async def add_fav_picture_url(pid: str, payload: FavPictureUrlIn, user: dict = Depends(get_current_user)):
+    p = await db.profiles.find_one({"id": pid, "user_id": user["id"]})
+    if not p:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    pic = FavPicture(url=str(payload.url), caption=payload.caption)
+    fav_pictures = p.get("fav_pictures", []) + [pic.model_dump()]
+    await db.profiles.update_one({"id": pid, "user_id": user["id"]}, {"$set": {"fav_pictures": fav_pictures}})
+    return _profile_out({**p, "fav_pictures": fav_pictures})
+
+
+@api_router.post("/profiles/{pid}/fav-pictures/upload")
+async def upload_fav_picture(pid: str, file: UploadFile = File(...), caption: Optional[str] = None,
+                              user: dict = Depends(get_current_user)):
+    if not os.environ.get("CLOUDINARY_CLOUD_NAME"):
+        raise HTTPException(status_code=500, detail="Image storage is not configured.")
+    p = await db.profiles.find_one({"id": pid, "user_id": user["id"]})
+    if not p:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    ct = (file.content_type or "").lower()
+    if ct not in ALLOWED_IMAGE_MIME:
+        raise HTTPException(status_code=400, detail=f"Unsupported image type: {ct}")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="File too large (max 5 MB)")
+    pic_id = str(uuid.uuid4())
+    folder = f"rolodex/users/{user['id']}/fav"
+    try:
+        result = cloudinary.uploader.upload(data, folder=folder, public_id=pic_id, overwrite=True,
+            resource_type="image", transformation=[{"quality": "auto", "fetch_format": "auto"}])
+    except Exception as e:
+        logger.exception("Cloudinary fav upload failed")
+        raise HTTPException(status_code=502, detail=f"Upload failed: {e}")
+    pic = FavPicture(id=pic_id, url=result.get("secure_url"), caption=caption,
+                     public_id=result.get("public_id"))
+    fav_pictures = p.get("fav_pictures", []) + [pic.model_dump()]
+    await db.profiles.update_one({"id": pid, "user_id": user["id"]}, {"$set": {"fav_pictures": fav_pictures}})
+    return _profile_out({**p, "fav_pictures": fav_pictures})
+
+
+@api_router.delete("/profiles/{pid}/fav-pictures/{pic_id}")
+async def delete_fav_picture(pid: str, pic_id: str, user: dict = Depends(get_current_user)):
+    p = await db.profiles.find_one({"id": pid, "user_id": user["id"]})
+    if not p:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    fav_pictures = p.get("fav_pictures", [])
+    target = next((fp for fp in fav_pictures if fp.get("id") == pic_id), None)
+    if target and target.get("public_id"):
+        try: cloudinary.uploader.destroy(target["public_id"], invalidate=True)
+        except Exception as e: logger.warning(f"Cloudinary fav destroy failed: {e}")
+    fav_pictures = [fp for fp in fav_pictures if fp.get("id") != pic_id]
+    await db.profiles.update_one({"id": pid, "user_id": user["id"]}, {"$set": {"fav_pictures": fav_pictures}})
+    return _profile_out({**p, "fav_pictures": fav_pictures})
+
+
 @api_router.delete("/profiles/{pid}")
 async def delete_profile(pid: str, user: dict = Depends(get_current_user)):
     p = await db.profiles.find_one({"id": pid, "user_id": user["id"]})
     if p and p.get("pic_public_id"):
         try: cloudinary.uploader.destroy(p["pic_public_id"], invalidate=True)
         except Exception as e: logger.warning(f"Cloudinary destroy failed: {e}")
+    # Also clean up any fav picture uploads
+    for fp in (p or {}).get("fav_pictures", []):
+        if fp.get("public_id"):
+            try: cloudinary.uploader.destroy(fp["public_id"], invalidate=True)
+            except Exception as e: logger.warning(f"Cloudinary fav destroy failed: {e}")
     await db.profiles.delete_one({"id": pid, "user_id": user["id"]})
     return {"ok": True}
 
