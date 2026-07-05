@@ -120,6 +120,11 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
   const [socialsExpanded, setSocialsExpanded] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [viewDetailsOpen, setViewDetailsOpen] = useState(false);
+  
+  // Photo lightbox
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [lightboxPhotoId, setLightboxPhotoId] = useState(null);
+  const [deletePhotoConfirmId, setDeletePhotoConfirmId] = useState(null);
 
   const initials = (profile.username || "?").slice(0, 2).toUpperCase();
   const igUrl = `https://instagram.com/${profile.username}`;
@@ -942,12 +947,18 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
                     </div>
                   )}
                   <button
-                    onClick={() => deleteFavPic(fp.id)}
-                    disabled={deletingFavId === fp.id}
+                    onClick={() => setDeletePhotoConfirmId(fp.id)}
                     className="absolute top-1.5 right-1.5 opacity-0 group-hover/pic:opacity-100 transition-opacity bg-black/70 hover:bg-red-500/80 text-white rounded-sm p-1"
                     title="Remove"
                   >
                     {deletingFavId === fp.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <X className="w-3 h-3" />}
+                  </button>
+                  <button
+                    onClick={() => { setLightboxPhotoId(fp.id); setLightboxOpen(true); }}
+                    className="absolute inset-0 w-full h-full opacity-0 hover:opacity-100 transition-opacity bg-black/20 flex items-center justify-center rounded-sm"
+                    title="View full size"
+                  >
+                    <span className="text-white text-sm font-semibold">View</span>
                   </button>
                 </div>
               ))}
@@ -963,6 +974,63 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ── Photo Lightbox Dialog ─────────────────────────────────────────── */}
+      <Dialog open={lightboxOpen} onOpenChange={setLightboxOpen}>
+        <DialogContent className="bg-black border-slate-700 rounded-sm sm:max-w-4xl max-h-[90vh] p-0">
+          {lightboxPhotoId && (() => {
+            const photo = favPictures.find((fp) => fp.id === lightboxPhotoId);
+            if (!photo) return null;
+            return (
+              <div className="relative w-full h-full flex flex-col">
+                <div className="flex-1 flex items-center justify-center bg-black">
+                  <img
+                    src={proxyImg(photo.url)}
+                    alt={photo.caption || "Photo"}
+                    className="max-w-full max-h-[80vh] object-contain"
+                  />
+                </div>
+                {photo.caption && (
+                  <div className="bg-slate-900 border-t border-slate-700 px-4 py-3 font-mono text-sm text-slate-300">
+                    {photo.caption}
+                  </div>
+                )}
+                <button
+                  onClick={() => setLightboxOpen(false)}
+                  className="absolute top-2 right-2 bg-black/70 hover:bg-red-500/80 text-white rounded-sm p-2"
+                  title="Close"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Delete Photo Confirmation Dialog ──────────────────────────────── */}
+      <AlertDialog open={deletePhotoConfirmId !== null} onOpenChange={(open) => !open && setDeletePhotoConfirmId(null)}>
+        <AlertDialogContent className="bg-slate-800 border-slate-700 rounded-sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="font-display uppercase tracking-tight text-red-400">Delete Favorite Photo?</AlertDialogTitle>
+            <AlertDialogDescription className="text-slate-400">
+              This will permanently remove this photo. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="rounded-sm bg-slate-700 border-slate-600 hover:bg-slate-600 text-slate-300">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (deletePhotoConfirmId) deleteFavPic(deletePhotoConfirmId);
+                setDeletePhotoConfirmId(null);
+              }}
+              className="rounded-sm bg-red-600 hover:bg-red-700 text-white border-0 font-display uppercase tracking-widest"
+            >
+              Delete Photo
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
