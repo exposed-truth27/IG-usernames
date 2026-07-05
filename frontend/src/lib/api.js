@@ -19,8 +19,11 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-export const proxyImg = (url) =>
-  url ? `${API}/img-proxy?url=${encodeURIComponent(url)}` : "";
+export const proxyImg = (url) => {
+  if (!url) return "";
+  if (url.startsWith("/uploads/")) return `${BACKEND_URL}${url}`;
+  return `${API}/img-proxy?url=${encodeURIComponent(url)}`;
+};
 
 export function formatApiError(detail) {
   if (detail == null) return "Something went wrong.";
