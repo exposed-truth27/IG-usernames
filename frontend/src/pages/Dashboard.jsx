@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
-import { api, formatApiError } from "@/lib/api";
+import { api, formatApiError, proxyImg } from "@/lib/api";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
@@ -362,7 +362,7 @@ export default function Dashboard() {
                 <div key={p.id} className="flex items-center justify-between bg-slate-900/60 p-3 rounded-lg border border-slate-700">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-lg border-2 border-green-500 overflow-hidden">
-                      <img src={api.proxyImg(p.profile_pic_url)} className="w-full h-full object-cover" />
+                      <img src={proxyImg(p.profile_pic_url)} className="w-full h-full object-cover" />
                     </div>
                     <div>
                       <div className="font-display font-bold text-white text-sm">@{p.username}</div>
