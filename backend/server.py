@@ -875,6 +875,12 @@ async def bulk_add_profiles(payload: BulkIn, user: dict = Depends(get_current_us
 
 @api_router.get("/img-proxy")
 async def img_proxy(url: str):
+    if url.startswith("/uploads/"):
+        # This shouldn't normally happen with the new frontend fix, but just in case
+        file_path = ROOT_DIR / url.lstrip("/")
+        if file_path.exists():
+            return Response(content=file_path.read_bytes(), media_type="image/jpeg")
+        raise HTTPException(status_code=404, detail="Local image not found")
     if not url.startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="Invalid url")
     if "res.cloudinary.com" in url:
