@@ -38,7 +38,7 @@ function TagButton({ label, icon, onClick, className = "" }) {
   return (
     <button
       onClick={onClick}
-      className={`font-mono text-[10px] uppercase tracking-wider border border-dashed border-slate-600 text-slate-400 px-2 py-0.5 rounded-sm hover:border-[#B0B7BC] hover:text-[#B0B7BC] inline-flex items-center gap-1 ${className}`}
+      className={`font-mono text-[10px] uppercase tracking-wider border border-dashed border-slate-600 text-slate-400 px-2 py-0.5 rounded-md hover:border-[#B0B7BC] hover:text-[#B0B7BC] inline-flex items-center gap-1 ${className}`}
     >
       {icon} {label}
     </button>
@@ -64,17 +64,17 @@ function ListEditor({ label, icon: Icon, items, placeholder, onChange }) {
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && add()}
           placeholder={placeholder}
-          className="bg-slate-900 border-slate-600 rounded-sm h-9 text-sm focus-visible:ring-[#0076B6] font-mono"
+          className="bg-slate-900 border-slate-600 rounded-md h-9 text-sm focus-visible:ring-[#0076B6] font-mono"
         />
         <Button onClick={add} disabled={!draft.trim()} size="sm"
-          className="rounded-sm bg-[#0076B6] hover:bg-[#0089d3] font-display uppercase tracking-widest h-9 px-3">
+          className="rounded-md bg-[#0076B6] hover:bg-[#0089d3] font-display uppercase tracking-widest h-9 px-3">
           <Plus className="w-3.5 h-3.5" />
         </Button>
       </div>
       {items.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {items.map((item, i) => (
-            <span key={i} className="inline-flex items-center gap-1 font-mono text-[11px] bg-slate-700/60 border border-slate-600 text-slate-300 px-2 py-0.5 rounded-sm">
+            <span key={i} className="inline-flex items-center gap-1 font-mono text-[11px] bg-slate-700/60 border border-slate-600 text-slate-300 px-2 py-0.5 rounded-md">
               {item}
               <button onClick={() => onChange(items.filter((_, j) => j !== i))}
                 className="text-slate-500 hover:text-red-400 ml-0.5">
@@ -99,19 +99,21 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
 
   // Edit panel state
   const [editOpen, setEditOpen] = useState(false);
-  const [editSaving, setEditSaving] = useState(false);
-  const [editRealName, setEditRealName] = useState("");
-  const [editHomeAddress, setEditHomeAddress] = useState("");
-  const [editAltIg, setEditAltIg] = useState([]);
-  const [editPhones, setEditPhones] = useState([]);
-  const [editEmails, setEditEmails] = useState([]);
-  const [editSocials, setEditSocials] = useState({});
-  const [editNotes, setEditNotes] = useState("");
+  const [editName, setEditName] = useState(profile.full_name || "");
+  const [editAddress, setEditAddress] = useState(profile.home_address || "");
+  const [editAltIgs, setEditAltIgs] = useState(profile.alt_instagrams || []);
+  const [editPhones, setEditPhones] = useState(profile.phones || []);
+  const [editEmails, setEditEmails] = useState(profile.emails || []);
+  const [editSocials, setEditSocials] = useState(profile.socials || {});
+  const [editNotes, setEditNotes] = useState(profile.notes || "");
+  const [savingEdit, setSavingEdit] = useState(false);
 
   // Fav pictures state
   const [favOpen, setFavOpen] = useState(false);
+  const [favPictures, setFavPictures] = useState(profile.fav_pictures || []);
   const [favUrl, setFavUrl] = useState("");
   const [favCaption, setFavCaption] = useState("");
+  const [favAdding, setFavAdding] = useState(false);
   const [favUploading, setFavUploading] = useState(false);
   const [deletingFavId, setDeletingFavId] = useState(null);
   const favFileRef = useRef(null);
@@ -125,822 +127,649 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxPhotoId, setLightboxPhotoId] = useState(null);
   const [deletePhotoConfirmId, setDeletePhotoConfirmId] = useState(null);
+  const [profilePicLightboxOpen, setProfilePicLightboxOpen] = useState(false);
+
+  // Online status
+  const [isOnline, setIsOnline] = useState(profile.is_online || false);
+  const [togglingOnline, setTogglingOnline] = useState(false);
 
   const initials = (profile.username || "?").slice(0, 2).toUpperCase();
   const igUrl = `https://instagram.com/${profile.username}`;
   const isManual = profile.pic_source === "manual";
 
-  const catIds = profile.category_ids || [];
-  const isFav = catIds.includes(SYS_FAV);
-  const isActive = catIds.includes(SYS_ACTIVE);
-  const isComplete = catIds.includes(SYS_COMPLETE);
-
-  const altInstagrams = profile.alt_instagrams || [];
-  const phones = profile.phones || [];
-  const emails = profile.emails || [];
-  const socials = profile.socials || {};
-  const favPictures = profile.fav_pictures || [];
-  const notes = profile.notes || "";
-
-  const hasSocials = Object.values(socials).some(Boolean);
-  const hasContactInfo = phones.length > 0 || emails.length > 0 || altInstagrams.length > 0 || hasSocials;
-
-  const persistCats = async (next) => {
-    try {
-      const { data } = await api.patch(`/profiles/${profile.id}`, { category_ids: next });
-      onChange({ ...profile, ...data });
-    } catch {
-      toast.error("Couldn't update categories");
-    }
-  };
-
-  const toggleCategory = (catId, checked) => {
-    let next = checked
-      ? [...new Set([...catIds, catId])]
-      : catIds.filter((c) => c !== catId);
-    if (checked && catId === SYS_ACTIVE)   next = next.filter((c) => c !== SYS_COMPLETE);
-    if (checked && catId === SYS_COMPLETE) next = next.filter((c) => c !== SYS_ACTIVE);
-    persistCats(next);
-  };
-
-  const toggleFav = () => toggleCategory(SYS_FAV, !isFav);
-
   const refresh = async () => {
     setBusy(true);
     try {
       const { data } = await api.post(`/profiles/${profile.id}/refresh`);
-      onChange({ ...profile, ...data });
-      setImgErr(false);
-      toast.success(isManual ? "Refreshed (manual picture kept)" : "Refreshed from Instagram");
-    } catch (e) {
-      toast.error(e?.response?.data?.detail || "Refresh failed — try setting a picture manually");
-    } finally { setBusy(false); }
-  };
-
-  const removeProfile = async () => {
-    try {
-      await api.delete(`/profiles/${profile.id}`);
-      onDelete(profile.id);
-      toast.success(`@${profile.username} removed`);
-    } catch { toast.error("Delete failed"); }
-    finally { setDeleteConfirmOpen(false); }
-  };
-
-  const removePicture = async () => {
-    if (!isManual) return;
-    setRemovingPic(true);
-    try {
-      const { data } = await api.delete(`/profiles/${profile.id}/picture`);
-      onChange({ ...profile, ...data });
-      setImgErr(false);
-      toast.success("Manual picture removed");
-    } catch (e) {
-      toast.error(e?.response?.data?.detail || "Couldn't remove picture");
-    } finally { setRemovingPic(false); }
-  };
-
-  const submitPicUrl = async () => {
-    const v = picUrl.trim();
-    if (!/^https?:\/\//i.test(v)) { toast.error("Enter a valid http(s) URL"); return; }
-    setUploading(true);
-    try {
-      const { data } = await api.post(`/profiles/${profile.id}/picture/url`, { url: v });
-      onChange({ ...profile, ...data });
-      setImgErr(false);
-      setPicUrl("");
-      setPicOpen(false);
-      toast.success("Picture updated");
-    } catch (e) {
-      toast.error(e?.response?.data?.detail || "Couldn't set picture URL");
-    } finally { setUploading(false); }
-  };
-
-  const submitPicUpload = async (file) => {
-    if (!file) return;
-    if (!/^image\/(jpeg|jpg|png|webp|gif)$/i.test(file.type)) { toast.error("Only JPG, PNG, WEBP, or GIF"); return; }
-    if (file.size > 5 * 1024 * 1024) { toast.error("Max 5 MB"); return; }
-    setUploading(true);
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      const { data } = await api.post(`/profiles/${profile.id}/picture/upload`, form, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
-      onChange({ ...profile, ...data });
-      setImgErr(false);
-      setPicOpen(false);
-      toast.success("Picture uploaded");
-    } catch (e) {
-      toast.error(e?.response?.data?.detail || "Upload failed");
+      onChange(data);
+      toast.success(`Updated @${data.username}`);
+    } catch {
+      toast.error("Refresh failed");
     } finally {
-      setUploading(false);
-      if (fileRef.current) fileRef.current.value = "";
+      setBusy(false);
     }
   };
 
-  // ── Edit panel ──────────────────────────────────────────────────────────────
-  const openEdit = () => {
-    setEditRealName(profile.full_name || "");
-    setEditHomeAddress(profile.home_address || "");
-    setEditAltIg([...altInstagrams]);
-    setEditPhones([...phones]);
-    setEditEmails([...emails]);
-    setEditSocials({ ...socials });
-    setEditNotes(notes);
-    setEditOpen(true);
+  const setManualUrl = async () => {
+    if (!picUrl.trim()) return;
+    setBusy(true);
+    try {
+      const { data } = await api.post(`/profiles/${profile.id}/picture/url`, { url: picUrl });
+      onChange(data);
+      setPicUrl(""); setPicOpen(false);
+      toast.success("Picture URL updated");
+    } catch { toast.error("Update failed"); }
+    finally { setBusy(false); }
+  };
+
+  const uploadPic = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      const { data } = await api.post(`/profiles/${profile.id}/picture/upload`, fd);
+      onChange(data);
+      setPicOpen(false);
+      toast.success("Photo uploaded");
+    } catch { toast.error("Upload failed"); }
+    finally { setUploading(false); }
+  };
+
+  const removePic = async () => {
+    setRemovingPic(true);
+    try {
+      const { data } = await api.delete(`/profiles/${profile.id}/picture`);
+      onChange(data);
+      setPicOpen(false);
+      toast.success("Picture removed");
+    } catch { toast.error("Remove failed"); }
+    finally { setRemovingPic(false); }
+  };
+
+  const toggleCategory = async (cid) => {
+    const ids = profile.category_ids || [];
+    const newIds = ids.includes(cid) ? ids.filter((x) => x !== cid) : [...ids, cid];
+    try {
+      const { data } = await api.patch(`/profiles/${profile.id}`, { category_ids: newIds });
+      onChange(data);
+    } catch { toast.error("Update failed"); }
   };
 
   const saveEdit = async () => {
-    setEditSaving(true);
+    setSavingEdit(true);
     try {
-      const { data } = await api.patch(`/profiles/${profile.id}`, {
-        full_name: editRealName,
-        home_address: editHomeAddress,
-        alt_instagrams: editAltIg,
+      const payload = {
+        full_name: editName,
+        home_address: editAddress,
+        alt_instagrams: editAltIgs,
         phones: editPhones,
         emails: editEmails,
         socials: editSocials,
         notes: editNotes,
-      });
-      onChange({ ...profile, ...data });
+      };
+      const { data } = await api.patch(`/profiles/${profile.id}`, payload);
+      onChange(data);
       setEditOpen(false);
       toast.success("Profile updated");
-    } catch (e) {
-      toast.error(e?.response?.data?.detail || "Save failed");
-    } finally { setEditSaving(false); }
+    } catch { toast.error("Save failed"); }
+    finally { setSavingEdit(false); }
   };
 
-  // ── Fav pictures ────────────────────────────────────────────────────────────
-  const submitFavUrl = async () => {
-    const v = favUrl.trim();
-    if (!/^https?:\/\//i.test(v)) { toast.error("Enter a valid http(s) URL"); return; }
-    setFavUploading(true);
+  const addFavUrl = async () => {
+    if (!favUrl.trim()) return;
+    setFavAdding(true);
     try {
-      const { data } = await api.post(`/profiles/${profile.id}/fav-pictures/url`, {
-        url: v, caption: favCaption.trim() || null,
-      });
-      onChange({ ...profile, ...data });
-      setFavUrl("");
-      setFavCaption("");
-      toast.success("Favorite picture added");
-    } catch (e) {
-      toast.error(e?.response?.data?.detail || "Couldn't add picture");
-    } finally { setFavUploading(false); }
+      const { data } = await api.post(`/profiles/${profile.id}/fav-pictures/url`, { url: favUrl, caption: favCaption });
+      setFavPictures(data.fav_pictures);
+      onChange(data);
+      setFavUrl(""); setFavCaption("");
+      toast.success("Photo added to gallery");
+    } catch { toast.error("Failed to add photo"); }
+    finally { setFavAdding(false); }
   };
 
-  const submitFavUpload = async (file) => {
+  const uploadFavPic = async (e) => {
+    const file = e.target.files?.[0];
     if (!file) return;
-    if (!/^image\/(jpeg|jpg|png|webp|gif)$/i.test(file.type)) { toast.error("Only JPG, PNG, WEBP, or GIF"); return; }
-    if (file.size > 5 * 1024 * 1024) { toast.error("Max 5 MB"); return; }
     setFavUploading(true);
+    const fd = new FormData();
+    fd.append("file", file);
+    if (favCaption) fd.append("caption", favCaption);
     try {
-      const form = new FormData();
-      form.append("file", file);
-      if (favCaption.trim()) form.append("caption", favCaption.trim());
-      const { data } = await api.post(`/profiles/${profile.id}/fav-pictures/upload`, form, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
-      onChange({ ...profile, ...data });
+      const { data } = await api.post(`/profiles/${profile.id}/fav-pictures/upload`, fd);
+      setFavPictures(data.fav_pictures);
+      onChange(data);
       setFavCaption("");
-      toast.success("Favorite picture uploaded");
-    } catch (e) {
-      toast.error(e?.response?.data?.detail || "Upload failed");
-    } finally {
-      setFavUploading(false);
-      if (favFileRef.current) favFileRef.current.value = "";
-    }
+      toast.success("Photo uploaded to gallery");
+    } catch { toast.error("Upload failed"); }
+    finally { setFavUploading(false); }
   };
 
   const deleteFavPic = async (picId) => {
     setDeletingFavId(picId);
     try {
       const { data } = await api.delete(`/profiles/${profile.id}/fav-pictures/${picId}`);
-      onChange({ ...profile, ...data });
-      toast.success("Picture removed");
-    } catch (e) {
-      toast.error(e?.response?.data?.detail || "Delete failed");
-    } finally { setDeletingFavId(null); }
+      setFavPictures(data.fav_pictures);
+      onChange(data);
+      toast.success("Photo removed");
+    } catch { toast.error("Remove failed"); }
+    finally { setDeletingFavId(null); }
   };
 
-  const visibleChips = catIds
-    .map((id) => categories.find((c) => c.id === id))
-    .filter((c) => c && !c.system);
+  const toggleOnline = async () => {
+    setTogglingOnline(true);
+    try {
+      const newStatus = !isOnline;
+      const { data } = await api.patch(`/profiles/${profile.id}/online`, { is_online: newStatus });
+      setIsOnline(data.is_online);
+      onChange(data);
+      toast.success(newStatus ? "Marked as online" : "Marked as offline");
+    } catch { toast.error("Update failed"); }
+    finally { setTogglingOnline(false); }
+  };
 
-  const statusPill = isActive
-    ? { label: "ACTIVE", cls: "bg-emerald-500/15 border-emerald-400/60 text-emerald-300" }
-    : isComplete
-      ? { label: "COMPLETE", cls: "bg-black border-white/40 text-white" }
-      : null;
-
-  const avatarRingCls = isActive
-    ? "avatar-active"
-    : isComplete
-      ? "avatar-complete"
-      : "ring-2 ring-transparent ring-offset-2 ring-offset-slate-800 group-hover:ring-[#0076B6]/60";
+  const checkActivity = async () => {
+    setBusy(true);
+    try {
+      const { data } = await api.post(`/profiles/${profile.id}/check-activity`);
+      onChange(data);
+      toast.success("Activity checked");
+    } catch { toast.error("Check failed"); }
+    finally { setBusy(false); }
+  };
 
   return (
-    <div
-      data-testid={`profile-card-${profile.username}`}
-      className={`group relative bg-slate-800 border border-slate-700 rounded-sm p-5 transition-all duration-200 hover:-translate-y-1 hover:border-[#0076B6] hover:shadow-[0_8px_32px_-8px_rgba(0,118,182,0.5)] ${isFav ? "card-fav" : ""}`}
-    >
-      <div className="absolute top-0 left-0 right-0 h-[3px] honolulu-stripe rounded-t-sm opacity-60 group-hover:opacity-100 transition-opacity" />
+    <div className="relative bg-slate-800 border-2 border-[#B0B7BC] rounded-lg overflow-hidden group hover:border-slate-400 transition-colors shadow-lg">
+      {/* ── Profile Picture Section ────────────────────────────────────────── */}
+      <div className="relative bg-slate-900 aspect-square overflow-hidden">
+        {/* Instagram-style online ring */}
+        {isOnline && (
+          <div className="absolute inset-0 rounded-lg z-0" style={{
+            background: 'conic-gradient(from 45deg, #feda75 0deg, #fa7e1e 40deg, #d92e7f 102deg, #9b36b7 169deg, #515bd4 180deg)',
+            padding: '3px'
+          }}>
+            <div className="absolute inset-[3px] bg-slate-900 rounded-lg" />
+          </div>
+        )}
 
-      {/* Top action bar */}
-      <div className="flex items-start justify-between mb-4">
-        <span className="font-mono text-[9px] uppercase tracking-[0.3em] text-slate-500">#{(profile.id || "").slice(0, 6)}</span>
-        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          <button
-            data-testid={`fav-${profile.username}`}
-            onClick={toggleFav}
-            className={`p-1.5 rounded-sm hover:bg-slate-700/60 ${isFav ? "text-slate-100" : "text-slate-400 hover:text-slate-200"}`}
-            title={isFav ? "Unfavorite" : "Mark as favorite"}
-          >
-            <Star className={`w-3.5 h-3.5 ${isFav ? "fill-slate-100" : ""}`} />
-          </button>
-          <button
-            onClick={() => setViewDetailsOpen(true)}
-            className="p-1.5 text-slate-400 hover:text-[#0076B6] hover:bg-slate-700/60 rounded-sm"
-            title="View all details"
-          >
-            <Info className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={openEdit}
-            className="p-1.5 text-slate-400 hover:text-[#0076B6] hover:bg-slate-700/60 rounded-sm"
-            title="Edit contact info & social links"
-          >
-            <Edit2 className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => setFavOpen(true)}
-            className="p-1.5 text-slate-400 hover:text-[#0076B6] hover:bg-slate-700/60 rounded-sm"
-            title="Favorite pictures"
-          >
-            <Camera className="w-3.5 h-3.5" />
-          </button>
-          {isManual && (
-            <button
-              data-testid={`remove-pic-${profile.username}`}
-              onClick={removePicture}
-              disabled={removingPic}
-              className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-slate-700/60 rounded-sm disabled:opacity-50"
-              title="Remove manual picture"
-            >
-              {removingPic ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ImageOff className="w-3.5 h-3.5" />}
-            </button>
+        <button
+          onClick={() => setProfilePicLightboxOpen(true)}
+          className="absolute inset-0 w-full h-full opacity-0 hover:opacity-100 transition-opacity bg-black/20 flex items-center justify-center rounded-lg z-10"
+          title="View full size"
+        >
+          <span className="text-white text-sm font-semibold">View</span>
+        </button>
+
+        {profile.profile_pic_url && !imgErr ? (
+          <img
+            src={proxyImg(profile.profile_pic_url)}
+            alt={profile.username}
+            onError={() => setImgErr(true)}
+            className={`w-full h-full object-cover transition-transform duration-500 group-hover:scale-105 ${isOnline ? 'p-1.5 rounded-lg' : ''}`}
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center bg-slate-800 text-slate-500 font-display text-4xl font-black">
+            {initials}
+          </div>
+        )}
+
+        {/* Status Indicators */}
+        <div className="absolute top-2 left-2 flex flex-col gap-1.5 z-20">
+          {profile.has_new_story && (
+            <div className="w-3 h-3 rounded-full bg-pink-500 border-2 border-slate-900 shadow-sm" title="New Story" />
           )}
-          <button data-testid={`set-pic-${profile.username}`} onClick={() => setPicOpen(true)} className="p-1.5 text-slate-400 hover:text-[#0076B6] hover:bg-slate-700/60 rounded-sm" title="Set profile picture manually">
-            <ImageIcon className="w-3.5 h-3.5" />
-          </button>
-          <button data-testid={`refresh-${profile.username}`} onClick={refresh} disabled={busy} className="p-1.5 text-slate-400 hover:text-[#0076B6] hover:bg-slate-700/60 rounded-sm" title="Refresh from Instagram">
+          {profile.has_new_post && (
+            <div className="w-3 h-3 rounded-full bg-blue-500 border-2 border-slate-900 shadow-sm" title="New Post" />
+          )}
+        </div>
+
+        <div className="absolute top-2 right-2 flex flex-col gap-1.5 z-20 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button onClick={refresh} disabled={busy} className="p-1.5 bg-black/60 hover:bg-black/80 text-white rounded-md backdrop-blur-sm" title="Refresh from Instagram">
             <RefreshCw className={`w-3.5 h-3.5 ${busy ? "animate-spin" : ""}`} />
           </button>
-          <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
-            <AlertDialogTrigger asChild>
-              <button data-testid={`delete-${profile.username}`} className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-slate-700/60 rounded-sm" title="Remove profile">
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </AlertDialogTrigger>
-            <AlertDialogContent className="bg-slate-800 border-slate-700 rounded-sm">
-              <AlertDialogHeader>
-                <AlertDialogTitle className="font-display uppercase tracking-tight text-red-400">Delete @{profile.username}?</AlertDialogTitle>
-                <AlertDialogDescription className="text-slate-400">
-                  This will permanently remove this profile and all its data (photos, notes, contact info). This action cannot be undone.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel className="rounded-sm bg-slate-700 border-slate-600 hover:bg-slate-600 text-slate-300">Cancel</AlertDialogCancel>
-                <AlertDialogAction onClick={removeProfile} className="rounded-sm bg-red-600 hover:bg-red-700 text-white border-0 font-display uppercase tracking-widest">
-                  Delete Profile
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
+          <button onClick={() => setPicOpen(true)} className="p-1.5 bg-black/60 hover:bg-black/80 text-white rounded-md backdrop-blur-sm" title="Change Photo">
+            <Edit2 className="w-3.5 h-3.5" />
+          </button>
+          <button onClick={checkActivity} disabled={busy} className="p-1.5 bg-black/60 hover:bg-black/80 text-white rounded-md backdrop-blur-sm" title="Check Activity">
+            <RefreshCw className={`w-3.5 h-3.5 ${busy ? "animate-spin" : ""}`} />
+          </button>
         </div>
-      </div>
 
-      {/* Avatar + name */}
-      <div className="flex flex-col items-center text-center">
-        <div className="relative">
-          <div className={`w-24 h-24 rounded-full overflow-hidden border-2 border-[#B0B7BC]/40 bg-slate-900 flex items-center justify-center transition-all duration-200 ${avatarRingCls}`}>
-            {profile.profile_pic_url && !imgErr ? (
-              <img src={proxyImg(profile.profile_pic_url)} alt={profile.username} onError={() => setImgErr(true)} className="w-full h-full object-cover" />
-            ) : (
-              <span className="font-display font-black text-3xl text-[#0076B6]">{initials}</span>
-            )}
+        {isManual && (
+          <div className="absolute bottom-2 right-2 px-1.5 py-0.5 bg-black/60 backdrop-blur-sm text-[9px] font-mono text-white/80 rounded-md flex items-center gap-1 border border-white/10 z-20">
+            <ImageIcon className="w-2.5 h-2.5" /> MANUAL
           </div>
-          {profile.is_verified && (
-            <div className="absolute -bottom-1 -right-1 bg-[#0076B6] rounded-full p-0.5">
-              <BadgeCheck className="w-4 h-4 text-white" />
-            </div>
-          )}
-          {statusPill && (
-            <div
-              data-testid={`status-${profile.username}`}
-              className={`absolute -top-1 -left-1 border rounded-sm px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-wider ${statusPill.cls}`}
-            >
-              {statusPill.label}
-            </div>
-          )}
-        </div>
-
-        <a href={igUrl} target="_blank" rel="noopener noreferrer" data-testid={`open-${profile.username}`}
-          className="mt-4 font-display font-bold text-lg text-white tracking-tight hover:text-[#0076B6] inline-flex items-center gap-1.5">
-          @{profile.username} <ExternalLink className="w-3.5 h-3.5 opacity-60" />
-        </a>
-        {profile.full_name && <div className="mt-1 text-sm text-white font-semibold line-clamp-1">{profile.full_name}</div>}
-        {profile.bio && <div className="mt-2 text-xs text-slate-500 line-clamp-2 leading-relaxed">{profile.bio}</div>}
+        )}
       </div>
 
-      {/* Contact info summary */}
-      {hasContactInfo && (
-        <div className="mt-4 space-y-1.5">
-          {altInstagrams.length > 0 && (
-            <div className="flex flex-wrap gap-1 justify-center">
-              {altInstagrams.map((u, i) => (
-                <a key={i} href={`https://instagram.com/${u}`} target="_blank" rel="noopener noreferrer"
-                  className="font-mono text-[10px] text-[#7cc6e8] hover:text-[#0076B6] inline-flex items-center gap-0.5">
-                  <Instagram className="w-2.5 h-2.5" /> @{u}
-                </a>
-              ))}
+      {/* ── Content Section ────────────────────────────────────────────────── */}
+      <div className="p-4">
+        <div className="flex items-start justify-between mb-1">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <a href={igUrl} target="_blank" rel="noreferrer" className="font-display text-base font-bold text-white hover:text-[#0076B6] truncate flex items-center gap-1">
+                @{profile.username}
+                <ExternalLink className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
+              </a>
+              {profile.is_verified && <BadgeCheck className="w-4 h-4 text-[#0076B6] shrink-0" />}
+            </div>
+            <div className="font-display text-sm font-bold text-white/90 truncate">
+              {profile.full_name || "No Name"}
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-1 ml-2">
+            <button
+              onClick={toggleOnline}
+              disabled={togglingOnline}
+              className={`h-7 px-2 rounded-md font-mono text-[10px] uppercase tracking-wider font-bold flex items-center justify-center gap-1 transition-colors ${
+                isOnline
+                  ? "bg-green-600/20 hover:bg-green-600/30 text-green-400"
+                  : "bg-slate-700/20 hover:bg-slate-700/30 text-slate-400"
+              }`}
+              title={isOnline ? "Mark offline" : "Mark online"}
+            >
+              {togglingOnline ? <Loader2 className="w-3 h-3 animate-spin" /> : <span className="text-[12px]">●</span>}
+            </button>
+          </div>
+        </div>
+
+        {profile.bio && (
+          <p className="text-xs text-slate-400 line-clamp-2 mb-3 leading-relaxed italic">
+            &ldquo;{profile.bio}&rdquo;
+          </p>
+        )}
+
+        {/* Contact Info Summary */}
+        <div className="space-y-1.5 mb-4 border-t border-slate-700/50 pt-3">
+          {(profile.alt_instagrams || []).length > 0 && (
+            <div className="flex items-center gap-2 text-[11px] text-slate-400 font-mono">
+              <Instagram className="w-3 h-3 shrink-0 text-[#0076B6]" />
+              <span className="truncate">{(profile.alt_instagrams || []).join(", ")}</span>
             </div>
           )}
-          {phones.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 justify-center">
-              {phones.map((ph, i) => (
-                <a key={i} href={`tel:${ph}`} className="font-mono text-[10px] text-slate-400 hover:text-white inline-flex items-center gap-0.5">
-                  <Phone className="w-2.5 h-2.5" /> {ph}
-                </a>
-              ))}
+          {(profile.phones || []).length > 0 && (
+            <div className="flex items-center gap-2 text-[11px] text-slate-400 font-mono">
+              <Phone className="w-3 h-3 shrink-0 text-[#0076B6]" />
+              <span className="truncate">{(profile.phones || []).join(", ")}</span>
             </div>
           )}
-          {emails.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 justify-center">
-              {emails.map((em, i) => (
-                <a key={i} href={`mailto:${em}`} className="font-mono text-[10px] text-slate-400 hover:text-white inline-flex items-center gap-0.5">
-                  <Mail className="w-2.5 h-2.5" /> {em}
-                </a>
-              ))}
+          {(profile.emails || []).length > 0 && (
+            <div className="flex items-center gap-2 text-[11px] text-slate-400 font-mono">
+              <Mail className="w-3 h-3 shrink-0 text-[#0076B6]" />
+              <span className="truncate">{(profile.emails || []).join(", ")}</span>
             </div>
           )}
-          {hasSocials && (
-            <div>
-              <button
-                onClick={() => setSocialsExpanded((v) => !v)}
-                className="w-full flex items-center justify-center gap-1 font-mono text-[10px] uppercase tracking-wider text-slate-500 hover:text-slate-300 mt-1"
+          
+          {/* Social Links Toggle */}
+          {Object.values(profile.socials || {}).some(v => v) && (
+            <div className="pt-1">
+              <button 
+                onClick={() => setSocialsExpanded(!socialsExpanded)}
+                className="flex items-center gap-1 text-[10px] font-mono uppercase tracking-widest text-[#0076B6] hover:text-[#0089d3]"
               >
                 {socialsExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                {socialsExpanded ? "Hide" : "Show"} social links
+                {socialsExpanded ? "Hide Socials" : "Show Socials"}
               </button>
+              
               {socialsExpanded && (
-                <div className="mt-2 flex flex-wrap gap-1.5 justify-center">
-                  {SOCIAL_META.filter((s) => socials[s.key]).map((s) => (
-                    <span key={s.key} className="font-mono text-[10px] bg-slate-700/50 border border-slate-600 text-slate-300 px-2 py-0.5 rounded-sm inline-flex items-center gap-1">
-                      <span>{s.icon}</span> {socials[s.key]}
-                    </span>
-                  ))}
+                <div className="mt-2 grid grid-cols-2 gap-2 animate-in fade-in slide-in-from-top-1 duration-200">
+                  {SOCIAL_META.map(meta => {
+                    const val = (profile.socials || {})[meta.key];
+                    if (!val) return null;
+                    return (
+                      <div key={meta.key} className="flex items-center gap-1.5 bg-slate-900/40 border border-slate-700/50 rounded-md px-2 py-1 overflow-hidden">
+                        <span className="text-xs shrink-0">{meta.icon}</span>
+                        <span className="text-[10px] font-mono text-slate-300 truncate" title={val}>{val}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
           )}
-          {favPictures.length > 0 && (
-            <div className="flex justify-center mt-1">
-              <button onClick={() => setFavOpen(true)} className="font-mono text-[10px] text-slate-500 hover:text-[#0076B6] inline-flex items-center gap-1">
-                <Camera className="w-2.5 h-2.5" /> {favPictures.length} fav photo{favPictures.length !== 1 ? "s" : ""}
-              </button>
-            </div>
-          )}
         </div>
-      )}
 
-      {/* Tags row */}
-      <div className="mt-5 pt-4 border-t border-slate-700/70">
-        <div className="flex flex-wrap items-center gap-1.5 justify-center min-h-[28px]">
-          {visibleChips.map((c) => (
-            <span key={c.id} className="font-mono text-[10px] uppercase tracking-wider bg-[#0076B6]/15 border border-[#0076B6]/40 text-[#7cc6e8] px-2 py-0.5 rounded-sm">{c.name}</span>
-          ))}
+        {/* Categories */}
+        <div className="flex flex-wrap gap-1.5 mb-4">
+          {categories.map((c) => {
+            const active = (profile.category_ids || []).includes(c.id);
+            if (!active) return null;
+            return (
+              <span key={c.id} className={`font-mono text-[9px] uppercase tracking-widest px-2 py-0.5 rounded-md border ${c.system ? "bg-[#0076B6]/10 border-[#0076B6]/40 text-[#7cc6e8]" : "bg-slate-700/40 border-slate-600 text-slate-400"}`}>
+                {c.name}
+              </span>
+            );
+          })}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button data-testid={`tag-${profile.username}`} className="font-mono text-[10px] uppercase tracking-wider border border-dashed border-slate-600 text-slate-400 px-2 py-0.5 rounded-sm hover:border-[#B0B7BC] hover:text-[#B0B7BC] inline-flex items-center gap-1">
-                <Tag className="w-3 h-3" /> Tag
+              <button className="w-6 h-6 flex items-center justify-center rounded-md border border-dashed border-slate-600 text-slate-500 hover:border-[#0076B6] hover:text-[#0076B6] transition-colors">
+                <Plus className="w-3 h-3" />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="bg-slate-800 border-slate-700 rounded-sm">
-              <DropdownMenuLabel className="font-mono text-[10px] uppercase tracking-[0.2em] text-slate-400">Status & Tags</DropdownMenuLabel>
+            <DropdownMenuContent align="start" className="bg-slate-800 border-slate-700 rounded-md w-48">
+              <DropdownMenuLabel className="font-mono text-[10px] uppercase tracking-[0.2em] text-slate-400">Categories</DropdownMenuLabel>
               <DropdownMenuSeparator className="bg-slate-700" />
-              {categories.filter((c) => c.system).map((c) => {
-                const checked = catIds.includes(c.id);
-                return (
-                  <DropdownMenuCheckboxItem
-                    key={c.id}
-                    checked={checked}
-                    onCheckedChange={(v) => toggleCategory(c.id, v)}
-                    data-testid={`tag-opt-${c.kind}-${profile.username}`}
-                    className="text-sm focus:bg-[#0076B6]/20 focus:text-white"
-                  >
-                    {c.name}
-                  </DropdownMenuCheckboxItem>
-                );
-              })}
-              {categories.some((c) => !c.system) && (
-                <>
-                  <DropdownMenuSeparator className="bg-slate-700" />
-                  <DropdownMenuLabel className="font-mono text-[10px] uppercase tracking-[0.2em] text-slate-400">Your Categories</DropdownMenuLabel>
-                </>
-              )}
-              {categories.filter((c) => !c.system).map((c) => {
-                const checked = catIds.includes(c.id);
-                return (
-                  <DropdownMenuCheckboxItem key={c.id} checked={checked} onCheckedChange={(v) => toggleCategory(c.id, v)} className="text-sm focus:bg-[#0076B6]/20 focus:text-white">
-                    {c.name}
-                  </DropdownMenuCheckboxItem>
-                );
-              })}
+              {categories.map((c) => (
+                <DropdownMenuCheckboxItem
+                  key={c.id}
+                  checked={(profile.category_ids || []).includes(c.id)}
+                  onCheckedChange={() => toggleCategory(c.id)}
+                  className="font-mono text-[11px] uppercase tracking-wider focus:bg-[#0076B6]/20 focus:text-white"
+                >
+                  {c.name}
+                </DropdownMenuCheckboxItem>
+              ))}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
+
+        {/* Action Row */}
+        <div className="flex items-center justify-between border-t border-slate-700/50 pt-4">
+          <div className="flex items-center gap-1.5">
+            <button 
+              onClick={() => setViewDetailsOpen(true)}
+              className="p-2 bg-slate-700/40 hover:bg-slate-700/60 text-slate-300 rounded-md transition-colors" 
+              title="View Details"
+            >
+              <Info className="w-4 h-4" />
+            </button>
+            <button 
+              onClick={() => {
+                setEditName(profile.full_name || "");
+                setEditAddress(profile.home_address || "");
+                setEditAltIgs(profile.alt_instagrams || []);
+                setEditPhones(profile.phones || []);
+                setEditEmails(profile.emails || []);
+                setEditSocials(profile.socials || {});
+                setEditNotes(profile.notes || "");
+                setEditOpen(true);
+              }}
+              className="p-2 bg-slate-700/40 hover:bg-slate-700/60 text-slate-300 rounded-md transition-colors" 
+              title="Edit Profile"
+            >
+              <Edit2 className="w-4 h-4" />
+            </button>
+            <button 
+              onClick={() => setFavOpen(true)}
+              className="p-2 bg-slate-700/40 hover:bg-slate-700/60 text-slate-300 rounded-md transition-colors relative" 
+              title="Favorite Pictures"
+            >
+              <Camera className="w-4 h-4" />
+              {favPictures.length > 0 && (
+                <span className="absolute -top-1 -right-1 w-4 h-4 bg-[#0076B6] text-white text-[9px] font-bold flex items-center justify-center rounded-full border-2 border-slate-800">
+                  {favPictures.length}
+                </span>
+              )}
+            </button>
+          </div>
+          
+          <button 
+            onClick={() => setDeleteConfirmOpen(true)}
+            className="p-2 bg-red-900/20 hover:bg-red-900/40 text-red-400 rounded-md transition-colors" 
+            title="Delete Profile"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
+        
+        {profile.last_login && (
+          <div className="mt-3 font-mono text-[9px] text-slate-500 uppercase tracking-widest text-center">
+            Last active: {new Date(profile.last_login).toLocaleString()}
+          </div>
+        )}
+
+        {/* Follower Images */}
+        {(profile.follower_images || []).length > 0 && (
+          <div className="mt-4 pt-3 border-t border-slate-700/50">
+            <div className="font-mono text-[9px] uppercase tracking-widest text-slate-500 mb-2">Followers in Rolodex</div>
+            <div className="flex -space-x-2 overflow-hidden">
+              {profile.follower_images.slice(0, 5).map((img, i) => (
+                <div key={i} className="inline-block h-6 w-6 rounded-full ring-2 ring-slate-800 border border-[#B0B7BC] overflow-hidden bg-slate-700">
+                  <img src={proxyImg(img)} className="h-full w-full object-cover" />
+                </div>
+              ))}
+              {profile.follower_images.length > 5 && (
+                <div className="flex items-center justify-center h-6 w-6 rounded-full ring-2 ring-slate-800 bg-slate-700 text-[9px] font-bold text-slate-300 border border-[#B0B7BC]">
+                  +{profile.follower_images.length - 5}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* ── View Details Dialog ──────────────────────────────────────────────── */}
+      {/* ── View Details Dialog ───────────────────────────────────────────── */}
       <Dialog open={viewDetailsOpen} onOpenChange={setViewDetailsOpen}>
-        <DialogContent className="bg-slate-800 border-slate-700 rounded-sm sm:max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogContent className="bg-slate-800 border-2 border-[#B0B7BC] rounded-lg sm:max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="font-display uppercase tracking-tight text-white">
-              Details · @{profile.username}
+            <DialogTitle className="font-display text-2xl font-black uppercase tracking-tight text-white flex items-center gap-3">
+              <div className="w-12 h-12 rounded-lg border-2 border-[#B0B7BC] overflow-hidden shrink-0">
+                <img src={proxyImg(profile.profile_pic_url)} className="w-full h-full object-cover" />
+              </div>
+              <div>
+                <div>@{profile.username}</div>
+                <div className="text-sm font-bold text-[#B0B7BC] normal-case">{profile.full_name}</div>
+              </div>
             </DialogTitle>
-            <DialogDescription className="text-slate-400 text-sm">
-              All information for this profile.
-            </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-5 py-2">
-            {/* Real Name */}
-            {profile.full_name && (
-              <div>
-                <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-1 block">Real Name</label>
-                <div className="text-sm text-white font-semibold">{profile.full_name}</div>
-              </div>
-            )}
-
-            {/* Home Address */}
+          <div className="space-y-6 py-4">
+            {/* Address */}
             {profile.home_address && (
               <div>
-                <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-1 block">Home Address</label>
-                <div className="text-sm text-slate-300 whitespace-pre-wrap">{profile.home_address}</div>
-              </div>
-            )}
-
-            {/* Alt Instagram Accounts */}
-            {altInstagrams.length > 0 && (
-              <div>
-                <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-2 block">Alt Instagram Accounts</label>
-                <div className="flex flex-wrap gap-1.5">
-                  {altInstagrams.map((u, i) => (
-                    <a key={i} href={`https://instagram.com/${u}`} target="_blank" rel="noopener noreferrer"
-                      className="font-mono text-[10px] text-[#7cc6e8] hover:text-[#0076B6] inline-flex items-center gap-0.5 bg-slate-700/40 border border-slate-600 px-2 py-1 rounded-sm">
-                      <Instagram className="w-2.5 h-2.5" /> @{u}
-                    </a>
-                  ))}
+                <label className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#0076B6] block mb-2">Home Address</label>
+                <div className="bg-slate-900/60 border border-slate-700 p-3 rounded-md text-sm text-slate-300 whitespace-pre-wrap leading-relaxed border-l-4 border-l-[#B0B7BC]">
+                  {profile.home_address}
                 </div>
               </div>
             )}
 
-            {/* Phone Numbers */}
-            {phones.length > 0 && (
+            {/* Contact Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {(profile.phones || []).length > 0 && (
+                <div>
+                  <label className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#0076B6] block mb-2">Phone Numbers</label>
+                  <div className="space-y-1">
+                    {profile.phones.map((p, i) => (
+                      <div key={i} className="font-mono text-xs text-slate-300 flex items-center gap-2">
+                        <Phone className="w-3 h-3 text-slate-500" /> {p}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {(profile.emails || []).length > 0 && (
+                <div>
+                  <label className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#0076B6] block mb-2">Email Addresses</label>
+                  <div className="space-y-1">
+                    {profile.emails.map((e, i) => (
+                      <div key={i} className="font-mono text-xs text-slate-300 flex items-center gap-2">
+                        <Mail className="w-3 h-3 text-slate-500" /> {e}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Socials */}
+            {Object.values(profile.socials || {}).some(v => v) && (
               <div>
-                <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-2 block">Phone Numbers</label>
-                <div className="flex flex-wrap gap-1.5">
-                  {phones.map((ph, i) => (
-                    <a key={i} href={`tel:${ph}`}
-                      className="font-mono text-[10px] text-slate-300 hover:text-white inline-flex items-center gap-0.5 bg-slate-700/40 border border-slate-600 px-2 py-1 rounded-sm">
-                      <Phone className="w-2.5 h-2.5" /> {ph}
-                    </a>
-                  ))}
+                <label className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#0076B6] block mb-2">Social Media</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {SOCIAL_META.map(meta => {
+                    const val = (profile.socials || {})[meta.key];
+                    if (!val) return null;
+                    return (
+                      <div key={meta.key} className="flex items-center gap-2 bg-slate-900/60 border border-slate-700 p-2 rounded-md">
+                        <span className="text-lg">{meta.icon}</span>
+                        <div className="min-w-0">
+                          <div className="text-[9px] font-mono text-slate-500 uppercase">{meta.label}</div>
+                          <div className="text-xs text-slate-300 truncate">{val}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
 
-            {/* Email Addresses */}
-            {emails.length > 0 && (
+            {/* Notes */}
+            {profile.notes && (
               <div>
-                <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-2 block">Email Addresses</label>
-                <div className="flex flex-wrap gap-1.5">
-                  {emails.map((em, i) => (
-                    <a key={i} href={`mailto:${em}`}
-                      className="font-mono text-[10px] text-slate-300 hover:text-white inline-flex items-center gap-0.5 bg-slate-700/40 border border-slate-600 px-2 py-1 rounded-sm">
-                      <Mail className="w-2.5 h-2.5" /> {em}
-                    </a>
-                  ))}
+                <label className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#0076B6] block mb-2">Notes</label>
+                <div className="bg-slate-900/60 border border-slate-700 p-3 rounded-md text-sm text-slate-300 whitespace-pre-wrap leading-relaxed italic">
+                  &ldquo;{profile.notes}&rdquo;
                 </div>
               </div>
             )}
+          </div>
 
-            {/* Social Platforms */}
-            {hasSocials && (
+          <DialogFooter className="flex-row justify-between sm:justify-between items-center border-t border-slate-700 pt-4">
+            <div className="font-mono text-[9px] text-slate-500 uppercase tracking-widest">Added {new Date(profile.created_at).toLocaleDateString()}</div>
+            <div className="flex gap-2">
+              <Button variant="ghost" onClick={() => setViewDetailsOpen(false)} className="rounded-md text-slate-400 hover:text-white">Close</Button>
+              <Button onClick={() => { setViewDetailsOpen(false); setEditOpen(true); }} className="rounded-md bg-[#0076B6] hover:bg-[#0089d3] font-display uppercase tracking-widest">Edit</Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Edit Profile Dialog ───────────────────────────────────────────── */}
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent className="bg-slate-800 border-2 border-[#B0B7BC] rounded-lg sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="font-display text-2xl font-black uppercase tracking-tight text-white">Edit Profile Details</DialogTitle>
+            <DialogDescription className="text-slate-400">Update contact info, social links, and private notes for @{profile.username}.</DialogDescription>
+          </DialogHeader>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 py-4">
+            <div className="space-y-5">
               <div>
-                <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-2 block">Social Platforms</label>
-                <div className="space-y-1.5">
-                  {SOCIAL_META.filter((s) => socials[s.key]).map((s) => (
-                    <div key={s.key} className="flex items-center gap-2 bg-slate-700/40 border border-slate-600 px-2 py-1 rounded-sm">
-                      <span className="text-sm">{s.icon}</span>
-                      <span className="font-mono text-[10px] uppercase tracking-wider text-slate-400 w-20 shrink-0">{s.label}</span>
-                      <span className="font-mono text-[10px] text-slate-300 truncate">{socials[s.key]}</span>
+                <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-2 block">Real Name</label>
+                <Input value={editName} onChange={(e) => setEditName(e.target.value)} placeholder="Full Name"
+                  className="bg-slate-900 border-slate-600 rounded-md h-10 text-sm focus-visible:ring-[#0076B6]" />
+              </div>
+              
+              <div>
+                <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-2 block">Home Address</label>
+                <Textarea value={editAddress} onChange={(e) => setEditAddress(e.target.value)} placeholder="Street, City, State, ZIP"
+                  className="bg-slate-900 border-slate-600 rounded-md min-h-[80px] text-sm focus-visible:ring-[#0076B6] leading-relaxed" />
+              </div>
+
+              <ListEditor label="Alt Instagrams" items={editAltIgs} onChange={setEditAltIgs} placeholder="other_handle" icon={Instagram} />
+              <ListEditor label="Phone Numbers" items={editPhones} onChange={setEditPhones} placeholder="555-0123" icon={Phone} />
+              <ListEditor label="Email Addresses" items={editEmails} onChange={setEditEmails} placeholder="name@example.com" icon={Mail} />
+            </div>
+
+            <div className="space-y-5">
+              <div className="space-y-3">
+                <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 block">Social Media</label>
+                <div className="grid grid-cols-1 gap-3">
+                  {SOCIAL_META.map(meta => (
+                    <div key={meta.key} className="flex items-center gap-2">
+                      <span className="text-lg w-6 flex justify-center">{meta.icon}</span>
+                      <Input 
+                        value={editSocials[meta.key] || ""} 
+                        onChange={(e) => setEditSocials({...editSocials, [meta.key]: e.target.value})}
+                        placeholder={meta.placeholder}
+                        className="bg-slate-900 border-slate-600 rounded-md h-9 text-xs focus-visible:ring-[#0076B6]"
+                      />
                     </div>
                   ))}
                 </div>
               </div>
-            )}
 
-            {/* Notes */}
-            {notes && (
               <div>
-                <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-1 block">Notes</label>
-                <div className="text-sm text-slate-300 bg-slate-700/40 border border-slate-600 px-3 py-2 rounded-sm whitespace-pre-wrap">{notes}</div>
+                <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-2 block">Private Notes</label>
+                <Textarea value={editNotes} onChange={(e) => setEditNotes(e.target.value)} placeholder="Add any extra details here..."
+                  className="bg-slate-900 border-slate-600 rounded-md min-h-[100px] text-sm focus-visible:ring-[#0076B6] leading-relaxed italic" />
               </div>
-            )}
-
-            {/* Favorite Pictures Count */}
-            {favPictures.length > 0 && (
-              <div>
-                <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-2 block">Favorite Pictures</label>
-                <button onClick={() => { setViewDetailsOpen(false); setFavOpen(true); }}
-                  className="font-mono text-[10px] text-[#7cc6e8] hover:text-[#0076B6] inline-flex items-center gap-1 bg-slate-700/40 border border-slate-600 px-2 py-1 rounded-sm">
-                  <Camera className="w-2.5 h-2.5" /> View {favPictures.length} photo{favPictures.length !== 1 ? "s" : ""}
-                </button>
-              </div>
-            )}
+            </div>
           </div>
 
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setViewDetailsOpen(false)} className="rounded-sm text-slate-400 hover:text-white">Close</Button>
-            <Button onClick={openEdit} className="rounded-sm bg-[#0076B6] hover:bg-[#0089d3] font-display uppercase tracking-widest">
-              <Edit2 className="w-3.5 h-3.5 mr-1.5" /> Edit
+          <DialogFooter className="border-t border-slate-700 pt-4">
+            <Button variant="ghost" onClick={() => setEditOpen(false)} className="rounded-md text-slate-400 hover:text-white">Cancel</Button>
+            <Button onClick={saveEdit} disabled={savingEdit} className="rounded-md bg-[#0076B6] hover:bg-[#0089d3] font-display uppercase tracking-widest px-8">
+              {savingEdit ? "Saving..." : "Save Changes"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* ── Profile Picture Dialog ───────────────────────────────────────────── */}
+      {/* ── Profile Picture Source Dialog ──────────────────────────────────── */}
       <Dialog open={picOpen} onOpenChange={setPicOpen}>
-        <DialogContent className="bg-slate-800 border-slate-700 rounded-sm sm:max-w-md">
+        <DialogContent className="bg-slate-800 border-2 border-[#B0B7BC] rounded-lg sm:max-w-md">
           <DialogHeader>
-            <DialogTitle className="font-display uppercase tracking-tight text-white">
-              Set picture · @{profile.username}
-            </DialogTitle>
-            <DialogDescription className="text-slate-400 text-sm">
-              Use this when the auto-fetch can&apos;t find a photo. Manual pictures are preserved across refreshes.
-            </DialogDescription>
+            <DialogTitle className="font-display uppercase tracking-tight">Change Profile Photo</DialogTitle>
           </DialogHeader>
-          <div className="space-y-5">
-            <div>
-              <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-2 inline-flex items-center gap-1.5">
-                <LinkIcon className="w-3 h-3" /> Paste image URL
-              </label>
-              <div className="flex gap-2 mt-2">
-                <Input
-                  data-testid={`pic-url-input-${profile.username}`}
-                  value={picUrl}
-                  onChange={(e) => setPicUrl(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && submitPicUrl()}
-                  placeholder="https://…/photo.jpg"
-                  className="bg-slate-900 border-slate-600 rounded-sm h-10 focus-visible:ring-[#0076B6] font-mono text-sm"
-                />
-                <Button
-                  data-testid={`pic-url-save-${profile.username}`}
-                  onClick={submitPicUrl}
-                  disabled={uploading || !picUrl.trim()}
-                  className="rounded-sm bg-[#0076B6] hover:bg-[#0089d3] font-display uppercase tracking-widest"
-                >
-                  {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Save"}
-                </Button>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400">Option 1: Image URL</label>
+              <div className="flex gap-2">
+                <Input value={picUrl} onChange={(e) => setPicUrl(e.target.value)} placeholder="https://..."
+                  className="bg-slate-900 border-slate-600 rounded-md h-10 focus-visible:ring-[#0076B6]" />
+                <Button onClick={setManualUrl} disabled={busy || !picUrl.trim()} size="sm" className="rounded-md bg-[#0076B6] hover:bg-[#0089d3]">Set</Button>
               </div>
             </div>
-            <div className="flex items-center gap-3">
-              <div className="flex-1 h-px bg-slate-700" />
-              <span className="font-mono text-[10px] uppercase tracking-widest text-slate-500">or</span>
-              <div className="flex-1 h-px bg-slate-700" />
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-slate-700" /></div>
+              <div className="relative flex justify-center text-[10px] uppercase tracking-widest"><span className="bg-slate-800 px-2 text-slate-500">OR</span></div>
             </div>
-            <div>
-              <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-2 inline-flex items-center gap-1.5">
-                <Upload className="w-3 h-3" /> Upload from device
-              </label>
-              <input
-                ref={fileRef}
-                data-testid={`pic-file-input-${profile.username}`}
-                type="file"
-                accept="image/jpeg,image/png,image/webp,image/gif"
-                onChange={(e) => submitPicUpload(e.target.files?.[0])}
-                disabled={uploading}
-                className="block w-full text-sm text-slate-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-sm file:border-0 file:font-mono file:text-[10px] file:uppercase file:tracking-widest file:bg-[#0076B6] file:text-white hover:file:bg-[#0089d3] disabled:opacity-50"
-              />
-            </div>
-            {isManual && (
-              <div className="pt-2 border-t border-slate-700">
-                <p className="font-mono text-[10px] uppercase tracking-widest text-slate-500 mb-2">Current: manual picture</p>
-                <Button variant="outline" size="sm" onClick={() => { removePicture(); setPicOpen(false); }}
-                  disabled={removingPic}
-                  className="rounded-sm border-red-500/40 text-red-400 hover:bg-red-500/10 hover:text-red-300 font-display uppercase tracking-widest text-xs">
-                  {removingPic ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <ImageOff className="w-3.5 h-3.5 mr-1" />}
-                  Remove manual picture
-                </Button>
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setPicOpen(false)} className="rounded-sm text-slate-400 hover:text-white">Close</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* ── Edit Contact Info Dialog ─────────────────────────────────────────── */}
-      <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent className="bg-slate-800 border-slate-700 rounded-sm sm:max-w-lg max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="font-display uppercase tracking-tight text-white">
-              Edit Info · @{profile.username}
-            </DialogTitle>
-            <DialogDescription className="text-slate-400 text-sm">
-              Add alternate accounts, contact details, and social links.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-6 py-2">
-            {/* Real Name */}
-            <div>
-              <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-2 block">
-                Real Name
-              </label>
-              <Input
-                value={editRealName}
-                onChange={(e) => setEditRealName(e.target.value)}
-                placeholder="Full name or display name"
-                className="bg-slate-900 border-slate-600 rounded-sm h-9 text-sm focus-visible:ring-[#0076B6] font-mono"
-              />
-            </div>
-
-            {/* Home Address */}
-            <div>
-              <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-2 block">
-                Home Address
-              </label>
-              <Textarea
-                value={editHomeAddress}
-                onChange={(e) => setEditHomeAddress(e.target.value)}
-                placeholder="Street, City, State, ZIP"
-                rows={2}
-                className="bg-slate-900 border-slate-600 rounded-sm text-sm focus-visible:ring-[#0076B6] font-mono resize-none"
-              />
-            </div>
-
-            {/* Alt Instagram accounts */}
-            <ListEditor
-              label="Alt Instagram Accounts"
-              icon={Instagram}
-              items={editAltIg}
-              placeholder="@otheraccount or URL"
-              onChange={setEditAltIg}
-            />
-
-            {/* Phone numbers */}
-            <ListEditor
-              label="Phone Numbers"
-              icon={Phone}
-              items={editPhones}
-              placeholder="+1 (555) 000-0000"
-              onChange={setEditPhones}
-            />
-
-            {/* Email addresses */}
-            <ListEditor
-              label="Email Addresses"
-              icon={Mail}
-              items={editEmails}
-              placeholder="name@example.com"
-              onChange={setEditEmails}
-            />
-
-            {/* Social platforms */}
-            <div>
-              <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-3 block">
-                Social Platforms
-              </label>
-              <div className="space-y-2">
-                {SOCIAL_META.map((s) => (
-                  <div key={s.key} className="flex items-center gap-2">
-                    <span className="w-20 font-mono text-[10px] uppercase tracking-wider text-slate-400 shrink-0 inline-flex items-center gap-1">
-                      <span>{s.icon}</span> {s.label}
-                    </span>
-                    <Input
-                      value={editSocials[s.key] || ""}
-                      onChange={(e) => setEditSocials((prev) => ({ ...prev, [s.key]: e.target.value }))}
-                      placeholder={s.placeholder}
-                      className="bg-slate-900 border-slate-600 rounded-sm h-8 text-sm focus-visible:ring-[#0076B6] font-mono"
-                    />
-                    {editSocials[s.key] && (
-                      <button onClick={() => setEditSocials((prev) => { const n = { ...prev }; delete n[s.key]; return n; })}
-                        className="text-slate-500 hover:text-red-400 shrink-0">
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Notes */}
-            <div>
-              <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-2 block">
-                Notes
-              </label>
-              <Textarea
-                value={editNotes}
-                onChange={(e) => setEditNotes(e.target.value)}
-                placeholder="Any notes about this person…"
-                rows={3}
-                className="bg-slate-900 border-slate-600 rounded-sm text-sm focus-visible:ring-[#0076B6] font-mono resize-none"
-              />
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setEditOpen(false)} className="rounded-sm text-slate-400 hover:text-white">Cancel</Button>
-            <Button onClick={saveEdit} disabled={editSaving}
-              className="rounded-sm bg-[#0076B6] hover:bg-[#0089d3] font-display uppercase tracking-widest">
-              {editSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : "Save"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* ── Favorite Pictures Dialog ─────────────────────────────────────────── */}
-      <Dialog open={favOpen} onOpenChange={setFavOpen}>
-        <DialogContent className="bg-slate-800 border-slate-700 rounded-sm sm:max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="font-display uppercase tracking-tight text-white">
-              Favorite Pictures · @{profile.username}
-            </DialogTitle>
-            <DialogDescription className="text-slate-400 text-sm">
-              Save photos you want to keep on file for this person.
-            </DialogDescription>
-          </DialogHeader>
-
-          {/* Add picture section */}
-          <div className="space-y-4 border border-slate-700 rounded-sm p-4 bg-slate-900/40">
-            <div className="font-mono text-[10px] uppercase tracking-[0.3em] text-[#B0B7BC]">Add a picture</div>
-
-            <div>
-              <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-2 inline-flex items-center gap-1.5">
-                <LinkIcon className="w-3 h-3" /> Caption (optional)
-              </label>
-              <Input
-                value={favCaption}
-                onChange={(e) => setFavCaption(e.target.value)}
-                placeholder="e.g. Game day, Jan 2025"
-                className="bg-slate-900 border-slate-600 rounded-sm h-9 text-sm focus-visible:ring-[#0076B6] font-mono"
-              />
-            </div>
-
-            <div className="flex gap-2">
-              <Input
-                value={favUrl}
-                onChange={(e) => setFavUrl(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && submitFavUrl()}
-                placeholder="https://…/photo.jpg"
-                className="bg-slate-900 border-slate-600 rounded-sm h-9 text-sm focus-visible:ring-[#0076B6] font-mono"
-              />
-              <Button onClick={submitFavUrl} disabled={favUploading || !favUrl.trim()} size="sm"
-                className="rounded-sm bg-[#0076B6] hover:bg-[#0089d3] font-display uppercase tracking-widest h-9 px-3 shrink-0">
-                {favUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Add URL"}
+            <div className="space-y-2">
+              <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400">Option 2: Upload File</label>
+              <input type="file" ref={fileRef} onChange={uploadPic} className="hidden" accept="image/*" />
+              <Button onClick={() => fileRef.current?.click()} disabled={uploading} variant="outline" className="w-full h-10 rounded-md border-slate-600 border-dashed text-slate-300 hover:bg-slate-700">
+                {uploading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Upload className="w-4 h-4 mr-2" />}
+                {uploading ? "Uploading..." : "Select Image from Device"}
               </Button>
             </div>
+            {profile.profile_pic_url && (
+              <Button onClick={removePic} disabled={removingPic} variant="ghost" className="w-full text-red-400 hover:text-red-300 hover:bg-red-900/20 rounded-md">
+                {removingPic ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Trash2 className="w-4 h-4 mr-2" />}
+                Remove Current Photo
+              </Button>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
-            <div className="flex items-center gap-3">
-              <div className="flex-1 h-px bg-slate-700" />
-              <span className="font-mono text-[10px] uppercase tracking-widest text-slate-500">or upload</span>
-              <div className="flex-1 h-px bg-slate-700" />
+      {/* ── Favorite Pictures Dialog ───────────────────────────────────────── */}
+      <Dialog open={favOpen} onOpenChange={setFavOpen}>
+        <DialogContent className="bg-slate-800 border-2 border-[#B0B7BC] rounded-lg sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="font-display text-2xl font-black uppercase tracking-tight text-white">Favorite Pictures Gallery</DialogTitle>
+            <DialogDescription className="text-slate-400">Add and manage a collection of photos for @{profile.username}.</DialogDescription>
+          </DialogHeader>
+
+          <div className="bg-slate-900/60 border border-slate-700 p-4 rounded-lg mb-6">
+            <div className="flex flex-col gap-3">
+              <div className="flex gap-2">
+                <Input value={favUrl} onChange={(e) => setFavUrl(e.target.value)} placeholder="Image URL (https://...)"
+                  className="bg-slate-800 border-slate-600 rounded-md h-10 text-sm focus-visible:ring-[#0076B6]" />
+                <Button onClick={addFavUrl} disabled={favAdding || !favUrl.trim()} className="rounded-md bg-[#0076B6] hover:bg-[#0089d3] h-10 px-4">
+                  {favAdding ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                </Button>
+              </div>
+              <div className="flex items-center gap-2">
+                <Input value={favCaption} onChange={(e) => setFavCaption(e.target.value)} placeholder="Add a caption (optional)"
+                  className="bg-slate-800 border-slate-600 rounded-md h-9 text-xs focus-visible:ring-[#0076B6]" />
+                <input type="file" ref={favFileRef} onChange={uploadFavPic} className="hidden" accept="image/*" />
+                <Button onClick={() => favFileRef.current?.click()} disabled={favUploading} variant="outline" className="rounded-md border-slate-600 border-dashed h-9 px-3 text-slate-400">
+                  {favUploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                </Button>
+              </div>
             </div>
-
-            <input
-              ref={favFileRef}
-              type="file"
-              accept="image/jpeg,image/png,image/webp,image/gif"
-              onChange={(e) => submitFavUpload(e.target.files?.[0])}
-              disabled={favUploading}
-              className="block w-full text-sm text-slate-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-sm file:border-0 file:font-mono file:text-[10px] file:uppercase file:tracking-widest file:bg-[#0076B6] file:text-white hover:file:bg-[#0089d3] disabled:opacity-50"
-            />
           </div>
 
-          {/* Gallery */}
           {favPictures.length > 0 ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-2">
+            <div className="grid grid-cols-4 gap-3">
               {favPictures.map((fp) => (
-                <div key={fp.id} className="group/pic relative rounded-sm overflow-hidden border border-slate-700 bg-slate-900 aspect-square">
-                  <img
-                    src={proxyImg(fp.url)}
-                    alt={fp.caption || "Favorite"}
-                    className="w-full h-full object-cover"
-                    onError={(e) => { e.target.style.display = "none"; }}
-                  />
+                <div key={fp.id} className="relative group/pic aspect-square bg-slate-700 rounded-lg overflow-hidden border border-[#B0B7BC]">
+                  <img src={proxyImg(fp.url)} alt={fp.caption || "Fav"} className="w-full h-full object-cover" />
                   {fp.caption && (
                     <div className="absolute bottom-0 left-0 right-0 bg-black/70 px-2 py-1 font-mono text-[9px] text-slate-300 truncate">
                       {fp.caption}
@@ -948,36 +777,39 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
                   )}
                   <button
                     onClick={() => setDeletePhotoConfirmId(fp.id)}
-                    className="absolute top-1.5 right-1.5 opacity-0 group-hover/pic:opacity-100 transition-opacity bg-black/70 hover:bg-red-500/80 text-white rounded-sm p-1"
+                    className="absolute top-1.5 right-1.5 opacity-0 group-hover/pic:opacity-100 transition-opacity bg-black/70 hover:bg-red-500/80 text-white rounded-md p-1 z-20"
                     title="Remove"
                   >
                     {deletingFavId === fp.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <X className="w-3 h-3" />}
                   </button>
                   <button
                     onClick={() => { setLightboxPhotoId(fp.id); setLightboxOpen(true); }}
-                    className="absolute inset-0 w-full h-full opacity-0 hover:opacity-100 transition-opacity bg-black/20 flex items-center justify-center rounded-sm"
+                    className="absolute inset-0 w-full h-full opacity-0 hover:opacity-100 transition-opacity bg-black/20 flex items-center justify-center rounded-lg z-10"
                     title="View full size"
                   >
-                    <span className="text-white text-sm font-semibold">View</span>
+                    <span className="text-white text-xs font-bold uppercase tracking-widest bg-black/40 px-2 py-1 rounded-md backdrop-blur-sm">View</span>
                   </button>
                 </div>
               ))}
             </div>
           ) : (
-            <div className="text-center py-8 text-slate-500 font-mono text-xs uppercase tracking-widest">
-              No favorite pictures yet
+            <div className="py-12 text-center border border-dashed border-slate-700 rounded-lg">
+              <ImageIcon className="w-8 h-8 text-slate-600 mx-auto mb-2 opacity-50" />
+              <div className="font-mono text-[10px] uppercase tracking-widest text-slate-500">
+                No favorite pictures yet
+              </div>
             </div>
           )}
 
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setFavOpen(false)} className="rounded-sm text-slate-400 hover:text-white">Close</Button>
+            <Button variant="ghost" onClick={() => setFavOpen(false)} className="rounded-md text-slate-400 hover:text-white">Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
       {/* ── Photo Lightbox Dialog ─────────────────────────────────────────── */}
       <Dialog open={lightboxOpen} onOpenChange={setLightboxOpen}>
-        <DialogContent className="bg-black border-slate-700 rounded-sm sm:max-w-4xl max-h-[90vh] p-0">
+        <DialogContent className="bg-black border-slate-700 rounded-lg sm:max-w-4xl max-h-[90vh] p-0">
           {lightboxPhotoId && (() => {
             const photo = favPictures.find((fp) => fp.id === lightboxPhotoId);
             if (!photo) return null;
@@ -987,7 +819,7 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
                   <img
                     src={proxyImg(photo.url)}
                     alt={photo.caption || "Photo"}
-                    className="max-w-full max-h-[80vh] object-contain"
+                    className="max-w-full max-h-[80vh] object-contain rounded-lg"
                   />
                 </div>
                 {photo.caption && (
@@ -997,7 +829,7 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
                 )}
                 <button
                   onClick={() => setLightboxOpen(false)}
-                  className="absolute top-2 right-2 bg-black/70 hover:bg-red-500/80 text-white rounded-sm p-2"
+                  className="absolute top-2 right-2 bg-black/70 hover:bg-red-500/80 text-white rounded-lg p-2"
                   title="Close"
                 >
                   <X className="w-5 h-5" />
@@ -1008,25 +840,66 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
         </DialogContent>
       </Dialog>
 
+      {/* ── Profile Picture Lightbox Dialog ──────────────────────────────── */}
+      <Dialog open={profilePicLightboxOpen} onOpenChange={setProfilePicLightboxOpen}>
+        <DialogContent className="bg-black border-slate-700 rounded-lg sm:max-w-4xl max-h-[90vh] p-0">
+          <div className="relative w-full h-full flex items-center justify-center bg-black">
+            <img
+              src={proxyImg(profile.profile_pic_url)}
+              alt={profile.username}
+              className="max-w-full max-h-[80vh] object-contain rounded-lg"
+            />
+            <button
+              onClick={() => setProfilePicLightboxOpen(false)}
+              className="absolute top-2 right-2 bg-black/70 hover:bg-red-500/80 text-white rounded-lg p-2"
+              title="Close"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* ── Delete Photo Confirmation Dialog ──────────────────────────────── */}
       <AlertDialog open={deletePhotoConfirmId !== null} onOpenChange={(open) => !open && setDeletePhotoConfirmId(null)}>
-        <AlertDialogContent className="bg-slate-800 border-slate-700 rounded-sm">
+        <AlertDialogContent className="bg-slate-800 border-slate-700 rounded-lg">
           <AlertDialogHeader>
             <AlertDialogTitle className="font-display uppercase tracking-tight text-red-400">Delete Favorite Photo?</AlertDialogTitle>
             <AlertDialogDescription className="text-slate-400">
-              This will permanently remove this photo. This action cannot be undone.
+              This will permanently remove this photo from the gallery. This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel className="rounded-sm bg-slate-700 border-slate-600 hover:bg-slate-600 text-slate-300">Cancel</AlertDialogCancel>
+            <AlertDialogCancel className="rounded-md bg-slate-700 border-slate-600 hover:bg-slate-600 text-slate-300">Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
                 if (deletePhotoConfirmId) deleteFavPic(deletePhotoConfirmId);
                 setDeletePhotoConfirmId(null);
               }}
-              className="rounded-sm bg-red-600 hover:bg-red-700 text-white border-0 font-display uppercase tracking-widest"
+              className="rounded-md bg-red-600 hover:bg-red-700 text-white border-0 font-display uppercase tracking-widest"
             >
               Delete Photo
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* ── Delete Profile Confirmation Dialog ────────────────────────────── */}
+      <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+        <AlertDialogContent className="bg-slate-800 border-slate-700 rounded-lg">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="font-display uppercase tracking-tight text-red-400">Remove from Rolodex?</AlertDialogTitle>
+            <AlertDialogDescription className="text-slate-400">
+              Are you sure you want to delete @{profile.username}? All contact info, notes, and favorite pictures will be permanently removed.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="rounded-md bg-slate-700 border-slate-600 hover:bg-slate-600 text-slate-300">Cancel</AlertDialogCancel>
+            <AlertDialogAction 
+              onClick={() => onDelete(profile.id)}
+              className="rounded-md bg-red-600 hover:bg-red-700 text-white border-0 font-display uppercase tracking-widest"
+            >
+              Confirm Delete
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
