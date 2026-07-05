@@ -282,64 +282,66 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
 
   return (
     <div className="relative bg-slate-800 border-2 border-[#B0B7BC] rounded-lg overflow-hidden group hover:border-slate-400 transition-colors shadow-lg">
-      {/* ── Profile Picture Section ────────────────────────────────────────── */}
-      <div className="relative bg-slate-900 aspect-square overflow-hidden">
-        {/* Instagram-style online ring */}
-        {isOnline && (
-          <div className="absolute inset-0 rounded-lg z-0" style={{
-            background: 'conic-gradient(from 45deg, #feda75 0deg, #fa7e1e 40deg, #d92e7f 102deg, #9b36b7 169deg, #515bd4 180deg)',
-            padding: '3px'
-          }}>
-            <div className="absolute inset-[3px] bg-slate-900 rounded-lg" />
-          </div>
-        )}
-
-        <button
-          onClick={() => setProfilePicLightboxOpen(true)}
-          className="absolute inset-0 w-full h-full opacity-0 hover:opacity-100 transition-opacity bg-black/20 flex items-center justify-center rounded-lg z-10"
-          title="View full size"
-        >
-          <span className="text-white text-sm font-semibold">View</span>
-        </button>
-
-        {profile.profile_pic_url && !imgErr ? (
-          <img
-            src={proxyImg(profile.profile_pic_url)}
-            alt={profile.username}
-            onError={() => setImgErr(true)}
-            className={`w-full h-full object-cover transition-transform duration-500 group-hover:scale-105 ${isOnline ? 'p-1.5 rounded-lg' : ''}`}
-          />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center bg-slate-800 text-slate-500 font-display text-4xl font-black">
-            {initials}
-          </div>
-        )}
-
-        {/* Status Indicators */}
-        <div className="absolute top-2 left-2 flex flex-col gap-1.5 z-20">
-          {profile.has_new_story && (
-            <div className="w-3 h-3 rounded-full bg-pink-500 border-2 border-slate-900 shadow-sm" title="New Story" />
+      {/* ── Profile Header Section (Circle Avatar) ─────────────────────────── */}
+      <div className="relative p-5 flex flex-col items-center bg-slate-900/40">
+        {/* Profile Picture with Instagram-style online ring */}
+        <div className="relative w-24 h-24 mb-3">
+          {isOnline && (
+            <div className="absolute inset-[-4px] rounded-full z-0" style={{
+              background: 'conic-gradient(from 45deg, #feda75 0deg, #fa7e1e 40deg, #d92e7f 102deg, #9b36b7 169deg, #515bd4 180deg)',
+              padding: '3px'
+            }}>
+              <div className="absolute inset-[2px] bg-slate-900 rounded-full" />
+            </div>
           )}
-          {profile.has_new_post && (
-            <div className="w-3 h-3 rounded-full bg-blue-500 border-2 border-slate-900 shadow-sm" title="New Post" />
-          )}
+
+          <div className="relative w-full h-full rounded-full border-2 border-[#B0B7BC] overflow-hidden bg-slate-800 z-10 group/avatar">
+            <button
+              onClick={() => setProfilePicLightboxOpen(true)}
+              className="absolute inset-0 w-full h-full opacity-0 group-hover/avatar:opacity-100 transition-opacity bg-black/40 flex items-center justify-center z-20"
+              title="View full size"
+            >
+              <span className="text-white text-[10px] font-bold uppercase tracking-widest">View</span>
+            </button>
+
+            {profile.profile_pic_url && !imgErr ? (
+              <img
+                src={proxyImg(profile.profile_pic_url)}
+                alt={profile.username}
+                onError={() => setImgErr(true)}
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center text-slate-500 font-display text-2xl font-black">
+                {initials}
+              </div>
+            )}
+          </div>
+
+          {/* Status Indicators */}
+          <div className="absolute -bottom-1 -right-1 flex flex-col gap-1 z-20">
+            {profile.has_new_story && (
+              <div className="w-4 h-4 rounded-full bg-pink-500 border-2 border-slate-900 shadow-lg" title="New Story" />
+            )}
+            {profile.has_new_post && (
+              <div className="w-4 h-4 rounded-full bg-blue-500 border-2 border-slate-900 shadow-lg" title="New Post" />
+            )}
+          </div>
         </div>
 
-        <div className="absolute top-2 right-2 flex flex-col gap-1.5 z-20 opacity-0 group-hover:opacity-100 transition-opacity">
-          <button onClick={refresh} disabled={busy} className="p-1.5 bg-black/60 hover:bg-black/80 text-white rounded-md backdrop-blur-sm" title="Refresh from Instagram">
-            <RefreshCw className={`w-3.5 h-3.5 ${busy ? "animate-spin" : ""}`} />
+        {/* Quick Actions (Floating) */}
+        <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button onClick={refresh} disabled={busy} className="p-1.5 bg-black/60 hover:bg-black/80 text-white rounded-md backdrop-blur-sm" title="Refresh">
+            <RefreshCw className={`w-3 h-3 ${busy ? "animate-spin" : ""}`} />
           </button>
-          <button onClick={() => setPicOpen(true)} className="p-1.5 bg-black/60 hover:bg-black/80 text-white rounded-md backdrop-blur-sm" title="Change Photo">
-            <Edit2 className="w-3.5 h-3.5" />
-          </button>
-          <button onClick={checkActivity} disabled={busy} className="p-1.5 bg-black/60 hover:bg-black/80 text-white rounded-md backdrop-blur-sm" title="Check Activity">
-            <RefreshCw className={`w-3.5 h-3.5 ${busy ? "animate-spin" : ""}`} />
+          <button onClick={() => setPicOpen(true)} className="p-1.5 bg-black/60 hover:bg-black/80 text-white rounded-md backdrop-blur-sm" title="Photo">
+            <Edit2 className="w-3 h-3" />
           </button>
         </div>
 
         {isManual && (
-          <div className="absolute bottom-2 right-2 px-1.5 py-0.5 bg-black/60 backdrop-blur-sm text-[9px] font-mono text-white/80 rounded-md flex items-center gap-1 border border-white/10 z-20">
-            <ImageIcon className="w-2.5 h-2.5" /> MANUAL
+          <div className="absolute top-2 left-2 px-1.5 py-0.5 bg-black/60 backdrop-blur-sm text-[8px] font-mono text-white/80 rounded-md flex items-center gap-1 border border-white/10">
+            <ImageIcon className="w-2 h-2" /> MANUAL
           </div>
         )}
       </div>
