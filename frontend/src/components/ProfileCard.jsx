@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import {
   BadgeCheck, ExternalLink, RefreshCw, Trash2, Tag, Image as ImageIcon,
   Upload, Link as LinkIcon, Loader2, Star, ImageOff, Edit2, X, Plus,
-  Phone, Mail, Instagram, Camera, ChevronDown, ChevronUp,
+  Phone, Mail, Instagram, Camera, ChevronDown, ChevronUp, Info,
 } from "lucide-react";
 import { proxyImg, api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -119,6 +119,7 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
   // Social links expand
   const [socialsExpanded, setSocialsExpanded] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [viewDetailsOpen, setViewDetailsOpen] = useState(false);
 
   const initials = (profile.username || "?").slice(0, 2).toUpperCase();
   const igUrl = `https://instagram.com/${profile.username}`;
@@ -352,6 +353,13 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
             <Star className={`w-3.5 h-3.5 ${isFav ? "fill-slate-100" : ""}`} />
           </button>
           <button
+            onClick={() => setViewDetailsOpen(true)}
+            className="p-1.5 text-slate-400 hover:text-[#0076B6] hover:bg-slate-700/60 rounded-sm"
+            title="View all details"
+          >
+            <Info className="w-3.5 h-3.5" />
+          </button>
+          <button
             onClick={openEdit}
             className="p-1.5 text-slate-400 hover:text-[#0076B6] hover:bg-slate-700/60 rounded-sm"
             title="Edit contact info & social links"
@@ -547,6 +555,125 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
           </DropdownMenu>
         </div>
       </div>
+
+      {/* ── View Details Dialog ──────────────────────────────────────────────── */}
+      <Dialog open={viewDetailsOpen} onOpenChange={setViewDetailsOpen}>
+        <DialogContent className="bg-slate-800 border-slate-700 rounded-sm sm:max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="font-display uppercase tracking-tight text-white">
+              Details · @{profile.username}
+            </DialogTitle>
+            <DialogDescription className="text-slate-400 text-sm">
+              All information for this profile.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-5 py-2">
+            {/* Real Name */}
+            {profile.full_name && (
+              <div>
+                <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-1 block">Real Name</label>
+                <div className="text-sm text-white font-semibold">{profile.full_name}</div>
+              </div>
+            )}
+
+            {/* Home Address */}
+            {profile.home_address && (
+              <div>
+                <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-1 block">Home Address</label>
+                <div className="text-sm text-slate-300 whitespace-pre-wrap">{profile.home_address}</div>
+              </div>
+            )}
+
+            {/* Alt Instagram Accounts */}
+            {altInstagrams.length > 0 && (
+              <div>
+                <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-2 block">Alt Instagram Accounts</label>
+                <div className="flex flex-wrap gap-1.5">
+                  {altInstagrams.map((u, i) => (
+                    <a key={i} href={`https://instagram.com/${u}`} target="_blank" rel="noopener noreferrer"
+                      className="font-mono text-[10px] text-[#7cc6e8] hover:text-[#0076B6] inline-flex items-center gap-0.5 bg-slate-700/40 border border-slate-600 px-2 py-1 rounded-sm">
+                      <Instagram className="w-2.5 h-2.5" /> @{u}
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Phone Numbers */}
+            {phones.length > 0 && (
+              <div>
+                <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-2 block">Phone Numbers</label>
+                <div className="flex flex-wrap gap-1.5">
+                  {phones.map((ph, i) => (
+                    <a key={i} href={`tel:${ph}`}
+                      className="font-mono text-[10px] text-slate-300 hover:text-white inline-flex items-center gap-0.5 bg-slate-700/40 border border-slate-600 px-2 py-1 rounded-sm">
+                      <Phone className="w-2.5 h-2.5" /> {ph}
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Email Addresses */}
+            {emails.length > 0 && (
+              <div>
+                <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-2 block">Email Addresses</label>
+                <div className="flex flex-wrap gap-1.5">
+                  {emails.map((em, i) => (
+                    <a key={i} href={`mailto:${em}`}
+                      className="font-mono text-[10px] text-slate-300 hover:text-white inline-flex items-center gap-0.5 bg-slate-700/40 border border-slate-600 px-2 py-1 rounded-sm">
+                      <Mail className="w-2.5 h-2.5" /> {em}
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Social Platforms */}
+            {hasSocials && (
+              <div>
+                <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-2 block">Social Platforms</label>
+                <div className="space-y-1.5">
+                  {SOCIAL_META.filter((s) => socials[s.key]).map((s) => (
+                    <div key={s.key} className="flex items-center gap-2 bg-slate-700/40 border border-slate-600 px-2 py-1 rounded-sm">
+                      <span className="text-sm">{s.icon}</span>
+                      <span className="font-mono text-[10px] uppercase tracking-wider text-slate-400 w-20 shrink-0">{s.label}</span>
+                      <span className="font-mono text-[10px] text-slate-300 truncate">{socials[s.key]}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Notes */}
+            {notes && (
+              <div>
+                <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-1 block">Notes</label>
+                <div className="text-sm text-slate-300 bg-slate-700/40 border border-slate-600 px-3 py-2 rounded-sm whitespace-pre-wrap">{notes}</div>
+              </div>
+            )}
+
+            {/* Favorite Pictures Count */}
+            {favPictures.length > 0 && (
+              <div>
+                <label className="font-mono text-[10px] uppercase tracking-widest text-slate-400 mb-2 block">Favorite Pictures</label>
+                <button onClick={() => { setViewDetailsOpen(false); setFavOpen(true); }}
+                  className="font-mono text-[10px] text-[#7cc6e8] hover:text-[#0076B6] inline-flex items-center gap-1 bg-slate-700/40 border border-slate-600 px-2 py-1 rounded-sm">
+                  <Camera className="w-2.5 h-2.5" /> View {favPictures.length} photo{favPictures.length !== 1 ? "s" : ""}
+                </button>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setViewDetailsOpen(false)} className="rounded-sm text-slate-400 hover:text-white">Close</Button>
+            <Button onClick={openEdit} className="rounded-sm bg-[#0076B6] hover:bg-[#0089d3] font-display uppercase tracking-widest">
+              <Edit2 className="w-3.5 h-3.5 mr-1.5" /> Edit
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* ── Profile Picture Dialog ───────────────────────────────────────────── */}
       <Dialog open={picOpen} onOpenChange={setPicOpen}>
