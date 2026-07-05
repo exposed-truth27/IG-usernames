@@ -159,6 +159,8 @@ class Profile(BaseModel):
     pic_source: Optional[str] = "fetched"
     pic_public_id: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    last_login: Optional[str] = None
+    is_online: bool = False
     # --- NEW FIELDS ---
     alt_instagrams: List[str] = []
     phones: List[str] = []
@@ -167,6 +169,7 @@ class Profile(BaseModel):
     socials: Dict[str, Optional[str]] = {}
     notes: Optional[str] = None
     fav_pictures: List[dict] = []
+    follower_images: List[str] = []
 
 
 async def get_current_user(request: Request) -> dict:
@@ -479,6 +482,11 @@ def _profile_out(p):
         "category_ids": p.get("category_ids", []),
         "pic_source": p.get("pic_source", "fetched"),
         "created_at": p.get("created_at", ""),
+        "last_login": p.get("last_login"),
+        "is_online": p.get("is_online", False),
+        "has_new_story": p.get("has_new_story", False),
+        "has_new_post": p.get("has_new_post", False),
+        "last_checked": p.get("last_checked"),
         # --- NEW FIELDS ---
         "alt_instagrams": p.get("alt_instagrams", []),
         "phones": p.get("phones", []),
@@ -487,6 +495,7 @@ def _profile_out(p):
         "socials": p.get("socials", {}),
         "notes": p.get("notes", None),
         "fav_pictures": p.get("fav_pictures", []),
+        "follower_images": p.get("follower_images", []),
     }
 
 
@@ -899,6 +908,83 @@ async def img_proxy(url: str):
         raise
     except Exception:
         raise HTTPException(status_code=502, detail="Upstream image error")
+
+
+# ─── Online Status & Activity ────────────────────────────────────────────────────
+
+@api_router.patch("/profiles/{pid}/online")
+async def toggle_online_status(pid: str, payload: dict, user: dict = Depends(get_current_user)):
+    """Toggle online status manually"""
+    p = await db.profiles.find_one({"id": pid, "user_id": user["id"]})
+    if not p:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    is_online = payload.get("is_online", False)
+    await db.profiles.update_one({"id": pid, "user_id": user["id"]}, 
+                                  {"$set": {"is_online": bool(is_online), "last_login": datetime.now(timezone.utc).isoformat()}})
+    return _profile_out({**p, "is_online": bool(is_online), "last_login": datetime.now(timezone.utc).isoformat()})
+
+
+@api_router.post("/profiles/{pid}/check-activity")
+async def check_profile_activity(pid: str, user: dict = Depends(get_current_user)):
+    """Check if profile has new stories or posts"""
+    p = await db.profiles.find_one({"id": pid, "user_id": user["id"]})
+    if not p:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    
+    # Try to fetch updated profile data
+    fetched = await fetch_instagram_profile(p["username"])
+    if not fetched:
+        raise HTTPException(status_code=502, detail="Could not check activity")
+    
+    # Simple heuristic: if bio or follower count changed recently, likely has activity
+    has_new_story = fetched.get("has_story", False)
+    has_new_post = fetched.get("has_recent_post", False)
+    
+    update = {
+        "has_new_story": has_new_story,
+        "has_new_post": has_new_post,
+        "last_checked": datetime.now(timezone.utc).isoformat()
+    }
+    await db.profiles.update_one({"id": pid, "user_id": user["id"]}, {"$set": update})
+    return _profile_out({**p, **update})
+
+
+@api_router.post("/profiles/refresh-all")
+async def refresh_all_profiles(user: dict = Depends(get_current_user)):
+    """Refresh all profile pictures and activity for the user"""
+    profiles = await db.profiles.find({"user_id": user["id"]}).to_list(None)
+    results = []
+    
+    for p in profiles:
+        try:
+            fetched = await fetch_instagram_profile(p["username"])
+            if not fetched:
+                results.append({"username": p["username"], "status": "failed"})
+                continue
+            
+            new_data = {"last_checked": datetime.now(timezone.utc).isoformat()}
+            if fetched.get("full_name"):
+                new_data["full_name"] = fetched["full_name"]
+            if fetched.get("bio"):
+                new_data["bio"] = fetched["bio"]
+            if "is_verified" in fetched:
+                new_data["is_verified"] = bool(fetched["is_verified"])
+            
+            is_manual = p.get("pic_source") == "manual"
+            got_pic = bool(fetched.get("profile_pic_url"))
+            if got_pic and not is_manual:
+                new_data["profile_pic_url"] = fetched["profile_pic_url"]
+                new_data["pic_source"] = "fetched"
+            
+            if new_data:
+                await db.profiles.update_one({"id": p["id"], "user_id": user["id"]}, {"$set": new_data})
+            
+            results.append({"username": p["username"], "status": "updated"})
+        except Exception as e:
+            logger.warning(f"Refresh failed for {p['username']}: {e}")
+            results.append({"username": p["username"], "status": "error"})
+    
+    return {"results": results, "total": len(results)}
 
 
 app.include_router(api_router)
