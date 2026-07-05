@@ -12,7 +12,7 @@ import {
 import ProfileCard from "@/components/ProfileCard";
 import BulkImportDialog from "@/components/BulkImportDialog";
 import CopyDialog from "@/components/CopyDialog";
-import { ArrowDownAZ, ArrowUpAZ, ArrowDownUp, Copy, Download, LogOut, Plus, Search, ShieldCheck, Trash2, Upload, Clock, Clock3 } from "lucide-react";
+import { ArrowDownAZ, ArrowUpAZ, ArrowDownUp, Copy, Download, LogOut, Plus, Search, ShieldCheck, Trash2, Upload, Clock, Clock3, RefreshCw, Users } from "lucide-react";
 import { toast } from "sonner";
 
 const SORT_OPTIONS = [
@@ -46,8 +46,10 @@ export default function Dashboard() {
   const [sortKey, setSortKey] = useState("newest");
   const [pasteValue, setPasteValue] = useState("");
   const [extracting, setExtracting] = useState(false);
+  const [refreshingAll, setRefreshingAll] = useState(false);
   const [newCatName, setNewCatName] = useState("");
   const [catDialogOpen, setCatDialogOpen] = useState(false);
+  const [onlineListOpen, setOnlineListOpen] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -98,6 +100,19 @@ export default function Dashboard() {
     } catch { toast.error("Delete failed"); }
   };
 
+  const refreshAll = async () => {
+    setRefreshingAll(true);
+    try {
+      const { data } = await api.post("/profiles/refresh-all");
+      await reloadAll();
+      toast.success(`Refreshed ${data.total} profiles`);
+    } catch {
+      toast.error("Batch refresh failed");
+    } finally {
+      setRefreshingAll(false);
+    }
+  };
+
   const filtered = useMemo(() => {
     let list = profiles;
     if (activeCat !== "all") list = list.filter((p) => (p.category_ids || []).includes(activeCat));
@@ -115,6 +130,8 @@ export default function Dashboard() {
     }
     return sortProfiles(list, sortKey);
   }, [profiles, activeCat, search, sortKey]);
+
+  const onlineProfiles = useMemo(() => profiles.filter(p => p.is_online), [profiles]);
 
   const exportJson = () => {
     const data = {
@@ -155,19 +172,26 @@ export default function Dashboard() {
         <div className="h-1 honolulu-stripe" />
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 bg-[#0076B6] flex items-center justify-center rounded-sm">
+            <div className="w-9 h-9 bg-[#0076B6] flex items-center justify-center rounded-lg border-2 border-[#B0B7BC]">
               <ShieldCheck className="w-5 h-5 text-white" />
             </div>
             <div>
               <div className="font-display text-xl font-black uppercase tracking-tight text-white leading-none">
                 Social <span className="text-[#0076B6]">Rolodex</span>
               </div>
-              <div className="font-mono text-[9px] uppercase tracking-[0.3em] text-slate-500 mt-1">Detroit · Playbook v2</div>
+              <div className="font-mono text-[9px] uppercase tracking-[0.3em] text-slate-500 mt-1">Detroit · Playbook v3</div>
             </div>
           </div>
           <div className="flex items-center gap-3">
+            <button 
+              onClick={() => setOnlineListOpen(true)}
+              className="flex items-center gap-2 px-3 py-1.5 bg-green-900/20 border border-green-700/50 rounded-lg text-green-400 hover:bg-green-900/30 transition-colors"
+            >
+              <Users className="w-4 h-4" />
+              <span className="font-mono text-[11px] font-bold">{onlineProfiles.length} Online</span>
+            </button>
             <span className="hidden sm:block font-mono text-[10px] uppercase tracking-[0.25em] text-[#B0B7BC]" data-testid="header-user-email">{user?.email}</span>
-            <Button data-testid="logout-button" onClick={logout} variant="ghost" className="h-9 rounded-sm text-slate-400 hover:text-white hover:bg-slate-800">
+            <Button data-testid="logout-button" onClick={logout} variant="ghost" className="h-9 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800">
               <LogOut className="w-4 h-4 mr-1.5" /> Sign Out
             </Button>
           </div>
@@ -185,7 +209,7 @@ export default function Dashboard() {
           </p>
         </div>
 
-        <form onSubmit={extract} className="border border-slate-700 bg-slate-800/60 rounded-sm p-5 md:p-6 mb-8">
+        <form onSubmit={extract} className="border-2 border-[#B0B7BC] bg-slate-800/60 rounded-lg p-5 md:p-6 mb-8 shadow-xl">
           <div className="flex items-center gap-2 mb-3">
             <span className="font-mono text-[10px] uppercase tracking-[0.3em] text-[#B0B7BC]">01 · Extract</span>
             <div className="flex-1 h-px bg-slate-700" />
@@ -193,9 +217,9 @@ export default function Dashboard() {
           <div className="flex flex-col md:flex-row gap-3">
             <Input data-testid="paste-url-input" value={pasteValue} onChange={(e) => setPasteValue(e.target.value)}
               placeholder="https://instagram.com/handle  or  @handle"
-              className="bg-slate-900 border-slate-600 rounded-sm h-12 text-base focus-visible:ring-[#0076B6] font-mono" />
+              className="bg-slate-900 border-slate-600 rounded-lg h-12 text-base focus-visible:ring-[#0076B6] font-mono" />
             <Button type="submit" disabled={extracting || !pasteValue.trim()} data-testid="extract-button"
-              className="h-12 px-8 rounded-sm bg-[#0076B6] hover:bg-[#0089d3] text-white font-display uppercase tracking-widest text-base font-bold">
+              className="h-12 px-8 rounded-lg bg-[#0076B6] hover:bg-[#0089d3] text-white font-display uppercase tracking-widest text-base font-bold">
               {extracting ? "Fetching…" : "Extract"}
             </Button>
           </div>
@@ -209,15 +233,24 @@ export default function Dashboard() {
             </div>
           </div>
           <div className="flex gap-2 flex-wrap">
+            <Button 
+              onClick={refreshAll} 
+              disabled={refreshingAll}
+              variant="outline" 
+              className="h-9 rounded-lg border-[#0076B6]/60 bg-[#0076B6]/10 text-[#7cc6e8] hover:bg-[#0076B6]/20 hover:text-white"
+            >
+              <RefreshCw className={`w-4 h-4 mr-1.5 ${refreshingAll ? "animate-spin" : ""}`} /> 
+              {refreshingAll ? "Refreshing..." : "Refresh All"}
+            </Button>
             <BulkImportDialog onImported={reloadAll} trigger={
-              <Button data-testid="import-button" variant="outline" className="h-9 rounded-sm border-[#0076B6]/60 bg-[#0076B6]/10 text-[#7cc6e8] hover:bg-[#0076B6]/20 hover:text-white">
+              <Button data-testid="import-button" variant="outline" className="h-9 rounded-lg border-slate-600 bg-transparent text-[#B0B7BC] hover:bg-slate-800 hover:text-white">
                 <Upload className="w-4 h-4 mr-1.5" /> Import
               </Button>} />
-            <Button data-testid="export-button" onClick={exportJson} variant="outline" className="h-9 rounded-sm border-slate-600 bg-transparent text-[#B0B7BC] hover:bg-slate-800 hover:text-white">
+            <Button data-testid="export-button" onClick={exportJson} variant="outline" className="h-9 rounded-lg border-slate-600 bg-transparent text-[#B0B7BC] hover:bg-slate-800 hover:text-white">
               <Download className="w-4 h-4 mr-1.5" /> Export
             </Button>
             <CopyDialog profiles={filtered} categories={categories} trigger={
-              <Button data-testid="copy-button" variant="outline" className="h-9 rounded-sm border-slate-600 bg-transparent text-[#B0B7BC] hover:bg-slate-800 hover:text-white">
+              <Button data-testid="copy-button" variant="outline" className="h-9 rounded-lg border-slate-600 bg-transparent text-[#B0B7BC] hover:bg-slate-800 hover:text-white">
                 <Copy className="w-4 h-4 mr-1.5" /> Copy…
               </Button>} />
           </div>
@@ -233,17 +266,17 @@ export default function Dashboard() {
             })}
             <Dialog open={catDialogOpen} onOpenChange={setCatDialogOpen}>
               <DialogTrigger asChild>
-                <button data-testid="new-category-button" className="font-mono text-[10px] uppercase tracking-wider text-slate-400 px-3 py-1.5 rounded-sm border border-dashed border-slate-600 hover:border-[#0076B6] hover:text-[#0076B6] inline-flex items-center gap-1">
+                <button data-testid="new-category-button" className="font-mono text-[10px] uppercase tracking-wider text-slate-400 px-3 py-1.5 rounded-lg border border-dashed border-slate-600 hover:border-[#0076B6] hover:text-[#0076B6] inline-flex items-center gap-1">
                   <Plus className="w-3 h-3" /> Category
                 </button>
               </DialogTrigger>
-              <DialogContent className="bg-slate-800 border-slate-700 rounded-sm">
+              <DialogContent className="bg-slate-800 border-2 border-[#B0B7BC] rounded-lg">
                 <DialogHeader><DialogTitle className="font-display uppercase tracking-tight">New Category</DialogTitle></DialogHeader>
                 <Input data-testid="new-category-input" value={newCatName} onChange={(e) => setNewCatName(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && createCategory()} placeholder="e.g. Wide Receivers"
-                  className="bg-slate-900 border-slate-600 rounded-sm h-11 focus-visible:ring-[#0076B6]" />
+                  className="bg-slate-900 border-slate-600 rounded-lg h-11 focus-visible:ring-[#0076B6]" />
                 <DialogFooter>
-                  <Button data-testid="create-category-button" onClick={createCategory} className="rounded-sm bg-[#0076B6] hover:bg-[#0089d3] font-display uppercase tracking-widest">Create</Button>
+                  <Button data-testid="create-category-button" onClick={createCategory} className="rounded-lg bg-[#0076B6] hover:bg-[#0089d3] font-display uppercase tracking-widest">Create</Button>
                 </DialogFooter>
               </DialogContent>
             </Dialog>
@@ -254,7 +287,7 @@ export default function Dashboard() {
             <div className="relative lg:w-56">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
               <Input data-testid="search-input" value={search} onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search handles…" className="pl-9 bg-slate-900 border-slate-600 rounded-sm h-9 focus-visible:ring-[#0076B6] font-mono text-sm" />
+                placeholder="Search handles…" className="pl-9 bg-slate-900 border-slate-600 rounded-lg h-9 focus-visible:ring-[#0076B6] font-mono text-sm" />
             </div>
 
             {/* Sort dropdown */}
@@ -263,7 +296,7 @@ export default function Dashboard() {
                 <Button
                   variant="outline"
                   data-testid="sort-button"
-                  className="h-9 rounded-sm border-slate-600 bg-transparent text-[#B0B7BC] hover:bg-slate-800 hover:text-white gap-1.5 font-mono text-[10px] uppercase tracking-wider shrink-0"
+                  className="h-9 rounded-lg border-slate-600 bg-transparent text-[#B0B7BC] hover:bg-slate-800 hover:text-white gap-1.5 font-mono text-[10px] uppercase tracking-wider shrink-0"
                   title={`Sort: ${activeSortOption.label}`}
                 >
                   <SortIcon className="w-3.5 h-3.5" />
@@ -271,8 +304,8 @@ export default function Dashboard() {
                   <ArrowDownUp className="w-3 h-3 opacity-50 sm:hidden" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="bg-slate-800 border-slate-700 rounded-sm w-48">
-                <DropdownMenuLabel className="font-mono text-[10px] uppercase tracking-[0.2em] text-slate-400">Sort Order</DropdownMenuLabel>
+              <DropdownMenuContent align="end" className="bg-slate-800 border-2 border-[#B0B7BC] rounded-lg w-48">
+                <DropdownMenuLabel className="font-mono text-[10px] uppercase tracking-[0.2em] text-slate-400">Sort Options</DropdownMenuLabel>
                 <DropdownMenuSeparator className="bg-slate-700" />
                 {SORT_OPTIONS.map((opt) => {
                   const Icon = opt.icon;
@@ -299,13 +332,13 @@ export default function Dashboard() {
 
         {/* Profile grid */}
         {filtered.length === 0 ? (
-          <div data-testid="empty-state" className="border border-dashed border-slate-700 rounded-sm py-20 text-center">
+          <div data-testid="empty-state" className="border-2 border-dashed border-slate-700 rounded-lg py-20 text-center">
             <div className="font-mono text-[10px] uppercase tracking-[0.3em] text-[#B0B7BC] mb-3">Empty Roster</div>
             <div className="font-display text-2xl font-bold uppercase tracking-tight text-white">Nothing here yet</div>
             <p className="mt-2 text-sm text-slate-400 max-w-md mx-auto">Tap Share on any Instagram profile, copy the link, and paste it up top to start building your collection.</p>
           </div>
         ) : (
-          <div data-testid="profile-grid" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+          <div data-testid="profile-grid" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
             {filtered.map((p) => (
               <ProfileCard key={p.id} profile={p} categories={categories}
                 onChange={(np) => setProfiles((prev) => prev.map((x) => (x.id === np.id ? np : x)))}
@@ -314,6 +347,44 @@ export default function Dashboard() {
           </div>
         )}
       </main>
+
+      {/* ── Online List Dialog ────────────────────────────────────────────── */}
+      <Dialog open={onlineListOpen} onOpenChange={setOnlineListOpen}>
+        <DialogContent className="bg-slate-800 border-2 border-[#B0B7BC] rounded-lg sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="font-display text-xl font-black uppercase tracking-tight text-white flex items-center gap-2">
+              <Users className="w-5 h-5 text-green-400" /> Currently Online
+            </DialogTitle>
+          </DialogHeader>
+          <div className="py-4 space-y-3 max-h-[60vh] overflow-y-auto pr-2">
+            {onlineProfiles.length > 0 ? (
+              onlineProfiles.map(p => (
+                <div key={p.id} className="flex items-center justify-between bg-slate-900/60 p-3 rounded-lg border border-slate-700">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-lg border-2 border-green-500 overflow-hidden">
+                      <img src={api.proxyImg(p.profile_pic_url)} className="w-full h-full object-cover" />
+                    </div>
+                    <div>
+                      <div className="font-display font-bold text-white text-sm">@{p.username}</div>
+                      <div className="font-mono text-[10px] text-slate-500 uppercase">Active Now</div>
+                    </div>
+                  </div>
+                  <a href={`https://instagram.com/${p.username}`} target="_blank" rel="noreferrer" className="text-[#0076B6] hover:text-[#0089d3]">
+                    <ExternalLink className="w-4 h-4" />
+                  </a>
+                </div>
+              ))
+            ) : (
+              <div className="text-center py-8 text-slate-500 font-mono text-xs uppercase tracking-widest">
+                No one is online right now
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setOnlineListOpen(false)} className="rounded-lg text-slate-400 hover:text-white">Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <footer className="relative border-t border-slate-700 mt-16 py-6 text-center">
         <div className="font-mono text-[10px] uppercase tracking-[0.3em] text-slate-500">Honolulu Blue #0076B6 · Silver #B0B7BC · Slate Gray</div>
@@ -324,7 +395,7 @@ export default function Dashboard() {
 
 function CatTab({ active, onClick, label, count, testid, onDelete, system }) {
   return (
-    <div className={`group inline-flex items-center font-display uppercase tracking-wider text-sm font-bold rounded-sm border transition-colors ${active ? "bg-[#0076B6] border-[#0076B6] text-white" : system ? "bg-transparent border-slate-300/40 text-slate-200/90 hover:border-slate-100 hover:text-white" : "bg-transparent border-slate-700 text-slate-400 hover:border-[#B0B7BC] hover:text-white"}`}>
+    <div className={`group inline-flex items-center font-display uppercase tracking-wider text-sm font-bold rounded-lg border transition-colors ${active ? "bg-[#0076B6] border-[#0076B6] text-white" : system ? "bg-transparent border-slate-300/40 text-slate-200/90 hover:border-slate-100 hover:text-white" : "bg-transparent border-slate-700 text-slate-400 hover:border-[#B0B7BC] hover:text-white"}`}>
       <button data-testid={testid} onClick={onClick} className="px-3 py-1.5 inline-flex items-center gap-2">
         <span>{label}</span>
         <span className={`font-mono text-[10px] ${active ? "text-white/80" : "text-slate-500"}`}>{count}</span>
@@ -336,14 +407,14 @@ function CatTab({ active, onClick, label, count, testid, onDelete, system }) {
               <Trash2 className="w-3 h-3" />
             </button>
           </AlertDialogTrigger>
-          <AlertDialogContent className="bg-slate-800 border-slate-700 rounded-sm">
+          <AlertDialogContent className="bg-slate-800 border-2 border-[#B0B7BC] rounded-lg">
             <AlertDialogHeader>
               <AlertDialogTitle className="font-display uppercase tracking-tight">Delete &ldquo;{label}&rdquo;?</AlertDialogTitle>
               <AlertDialogDescription className="text-slate-400">This removes the category and unassigns it from all profiles. Profiles themselves are kept.</AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel className="rounded-sm bg-slate-700 border-slate-600 hover:bg-slate-600">Cancel</AlertDialogCancel>
-              <AlertDialogAction onClick={onDelete} className="rounded-sm bg-red-600 hover:bg-red-700 text-white border-0">Delete</AlertDialogAction>
+              <AlertDialogCancel className="rounded-lg bg-slate-700 border-slate-600 hover:bg-slate-600">Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={onDelete} className="rounded-lg bg-red-600 hover:bg-red-700 text-white border-0">Delete</AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
