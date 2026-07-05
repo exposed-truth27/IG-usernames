@@ -4,10 +4,16 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
+# Create uploads directory if it doesn't exist
+UPLOADS_DIR = ROOT_DIR / "uploads"
+UPLOADS_DIR.mkdir(exist_ok=True)
+
 import os
 import re
 import uuid
 import logging
+import shutil
+from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Annotated, Dict
 
@@ -18,6 +24,7 @@ import cloudinary
 import cloudinary.uploader
 from bson import ObjectId
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, BeforeValidator, ConfigDict, EmailStr, Field, HttpUrl
@@ -595,8 +602,6 @@ async def set_picture_url(pid: str, payload: PictureUrlIn, user: dict = Depends(
 
 @api_router.post("/profiles/{pid}/picture/upload")
 async def upload_picture(pid: str, file: UploadFile = File(...), user: dict = Depends(get_current_user)):
-    if not os.environ.get("CLOUDINARY_CLOUD_NAME"):
-        raise HTTPException(status_code=500, detail="Image storage is not configured (CLOUDINARY_* env vars missing).")
     p = await db.profiles.find_one({"id": pid, "user_id": user["id"]})
     if not p:
         raise HTTPException(status_code=404, detail="Profile not found")
@@ -608,18 +613,38 @@ async def upload_picture(pid: str, file: UploadFile = File(...), user: dict = De
         raise HTTPException(status_code=400, detail="Empty file")
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=400, detail="File too large (max 5 MB)")
-    folder = f"rolodex/users/{user['id']}"
+    
+    # Try Cloudinary first if configured
+    if os.environ.get("CLOUDINARY_CLOUD_NAME"):
+        folder = f"rolodex/users/{user['id']}"
+        try:
+            result = cloudinary.uploader.upload(data, folder=folder, public_id=p["id"], overwrite=True,
+                resource_type="image", transformation=[{"width": 512, "height": 512, "crop": "fill",
+                    "gravity": "face", "quality": "auto", "fetch_format": "auto"}])
+            new_data = {"profile_pic_url": result.get("secure_url"), "pic_public_id": result.get("public_id"),
+                        "pic_source": "manual"}
+            await db.profiles.update_one({"id": pid, "user_id": user["id"]}, {"$set": new_data})
+            return _profile_out({**p, **new_data})
+        except Exception as e:
+            logger.warning(f"Cloudinary upload failed, falling back to local storage: {e}")
+    
+    # Fallback to local storage
+    user_dir = UPLOADS_DIR / user["id"]
+    user_dir.mkdir(exist_ok=True)
+    file_ext = Path(file.filename or "image.jpg").suffix or ".jpg"
+    file_name = f"{p['id']}{file_ext}"
+    file_path = user_dir / file_name
+    
     try:
-        result = cloudinary.uploader.upload(data, folder=folder, public_id=p["id"], overwrite=True,
-            resource_type="image", transformation=[{"width": 512, "height": 512, "crop": "fill",
-                "gravity": "face", "quality": "auto", "fetch_format": "auto"}])
+        with open(file_path, "wb") as f:
+            f.write(data)
+        pic_url = f"/uploads/{user['id']}/{file_name}"
+        new_data = {"profile_pic_url": pic_url, "pic_public_id": None, "pic_source": "manual"}
+        await db.profiles.update_one({"id": pid, "user_id": user["id"]}, {"$set": new_data})
+        return _profile_out({**p, **new_data})
     except Exception as e:
-        logger.exception("Cloudinary upload failed")
+        logger.exception("Local upload failed")
         raise HTTPException(status_code=502, detail=f"Upload failed: {e}")
-    new_data = {"profile_pic_url": result.get("secure_url"), "pic_public_id": result.get("public_id"),
-                "pic_source": "manual"}
-    await db.profiles.update_one({"id": pid, "user_id": user["id"]}, {"$set": new_data})
-    return _profile_out({**p, **new_data})
 
 
 @api_router.delete("/profiles/{pid}/picture")
@@ -627,10 +652,23 @@ async def remove_picture(pid: str, user: dict = Depends(get_current_user)):
     p = await db.profiles.find_one({"id": pid, "user_id": user["id"]})
     if not p:
         raise HTTPException(status_code=404, detail="Profile not found")
+    
+    # Try to delete local file if it exists
+    pic_url = p.get("profile_pic_url", "")
+    if pic_url.startswith("/uploads/"):
+        try:
+            file_path = ROOT_DIR / pic_url.lstrip("/")
+            if file_path.exists():
+                file_path.unlink()
+        except Exception as e:
+            logger.warning(f"Local file delete failed: {e}")
+    
+    # Try to delete from Cloudinary if it was uploaded there
     old_pid = p.get("pic_public_id")
     if old_pid:
         try: cloudinary.uploader.destroy(old_pid, invalidate=True)
         except Exception as e: logger.warning(f"Cloudinary destroy failed: {e}")
+    
     new_data = {"profile_pic_url": "", "pic_public_id": None, "pic_source": "none"}
     try:
         fetched = await fetch_instagram_profile(p["username"])
@@ -667,8 +705,6 @@ async def add_fav_picture_url(pid: str, payload: FavPictureUrlIn, user: dict = D
 @api_router.post("/profiles/{pid}/fav-pictures/upload")
 async def upload_fav_picture(pid: str, file: UploadFile = File(...), caption: Optional[str] = None,
                               user: dict = Depends(get_current_user)):
-    if not os.environ.get("CLOUDINARY_CLOUD_NAME"):
-        raise HTTPException(status_code=500, detail="Image storage is not configured.")
     p = await db.profiles.find_one({"id": pid, "user_id": user["id"]})
     if not p:
         raise HTTPException(status_code=404, detail="Profile not found")
@@ -680,19 +716,41 @@ async def upload_fav_picture(pid: str, file: UploadFile = File(...), caption: Op
         raise HTTPException(status_code=400, detail="Empty file")
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=400, detail="File too large (max 5 MB)")
+    
     pic_id = str(uuid.uuid4())
-    folder = f"rolodex/users/{user['id']}/fav"
+    
+    # Try Cloudinary first if configured
+    if os.environ.get("CLOUDINARY_CLOUD_NAME"):
+        folder = f"rolodex/users/{user['id']}/fav"
+        try:
+            result = cloudinary.uploader.upload(data, folder=folder, public_id=pic_id, overwrite=True,
+                resource_type="image", transformation=[{"quality": "auto", "fetch_format": "auto"}])
+            pic = FavPicture(id=pic_id, url=result.get("secure_url"), caption=caption,
+                             public_id=result.get("public_id"))
+            fav_pictures = p.get("fav_pictures", []) + [pic.model_dump()]
+            await db.profiles.update_one({"id": pid, "user_id": user["id"]}, {"$set": {"fav_pictures": fav_pictures}})
+            return _profile_out({**p, "fav_pictures": fav_pictures})
+        except Exception as e:
+            logger.warning(f"Cloudinary fav upload failed, falling back to local storage: {e}")
+    
+    # Fallback to local storage
+    user_dir = UPLOADS_DIR / user["id"] / "fav"
+    user_dir.mkdir(parents=True, exist_ok=True)
+    file_ext = Path(file.filename or "image.jpg").suffix or ".jpg"
+    file_name = f"{pic_id}{file_ext}"
+    file_path = user_dir / file_name
+    
     try:
-        result = cloudinary.uploader.upload(data, folder=folder, public_id=pic_id, overwrite=True,
-            resource_type="image", transformation=[{"quality": "auto", "fetch_format": "auto"}])
+        with open(file_path, "wb") as f:
+            f.write(data)
+        pic_url = f"/uploads/{user['id']}/fav/{file_name}"
+        pic = FavPicture(id=pic_id, url=pic_url, caption=caption, public_id=None)
+        fav_pictures = p.get("fav_pictures", []) + [pic.model_dump()]
+        await db.profiles.update_one({"id": pid, "user_id": user["id"]}, {"$set": {"fav_pictures": fav_pictures}})
+        return _profile_out({**p, "fav_pictures": fav_pictures})
     except Exception as e:
-        logger.exception("Cloudinary fav upload failed")
+        logger.exception("Local fav upload failed")
         raise HTTPException(status_code=502, detail=f"Upload failed: {e}")
-    pic = FavPicture(id=pic_id, url=result.get("secure_url"), caption=caption,
-                     public_id=result.get("public_id"))
-    fav_pictures = p.get("fav_pictures", []) + [pic.model_dump()]
-    await db.profiles.update_one({"id": pid, "user_id": user["id"]}, {"$set": {"fav_pictures": fav_pictures}})
-    return _profile_out({**p, "fav_pictures": fav_pictures})
 
 
 @api_router.delete("/profiles/{pid}/fav-pictures/{pic_id}")
@@ -702,9 +760,21 @@ async def delete_fav_picture(pid: str, pic_id: str, user: dict = Depends(get_cur
         raise HTTPException(status_code=404, detail="Profile not found")
     fav_pictures = p.get("fav_pictures", [])
     target = next((fp for fp in fav_pictures if fp.get("id") == pic_id), None)
+    
+    # Try to delete local file if it exists
+    if target and target.get("url", "").startswith("/uploads/"):
+        try:
+            file_path = ROOT_DIR / target["url"].lstrip("/")
+            if file_path.exists():
+                file_path.unlink()
+        except Exception as e:
+            logger.warning(f"Local file delete failed: {e}")
+    
+    # Try to delete from Cloudinary if it was uploaded there
     if target and target.get("public_id"):
         try: cloudinary.uploader.destroy(target["public_id"], invalidate=True)
         except Exception as e: logger.warning(f"Cloudinary fav destroy failed: {e}")
+    
     fav_pictures = [fp for fp in fav_pictures if fp.get("id") != pic_id]
     await db.profiles.update_one({"id": pid, "user_id": user["id"]}, {"$set": {"fav_pictures": fav_pictures}})
     return _profile_out({**p, "fav_pictures": fav_pictures})
@@ -713,14 +783,35 @@ async def delete_fav_picture(pid: str, pic_id: str, user: dict = Depends(get_cur
 @api_router.delete("/profiles/{pid}")
 async def delete_profile(pid: str, user: dict = Depends(get_current_user)):
     p = await db.profiles.find_one({"id": pid, "user_id": user["id"]})
-    if p and p.get("pic_public_id"):
-        try: cloudinary.uploader.destroy(p["pic_public_id"], invalidate=True)
-        except Exception as e: logger.warning(f"Cloudinary destroy failed: {e}")
-    # Also clean up any fav picture uploads
+    
+    # Clean up profile picture
+    if p:
+        pic_url = p.get("profile_pic_url", "")
+        if pic_url.startswith("/uploads/"):
+            try:
+                file_path = ROOT_DIR / pic_url.lstrip("/")
+                if file_path.exists():
+                    file_path.unlink()
+            except Exception as e:
+                logger.warning(f"Local file delete failed: {e}")
+        
+        if p.get("pic_public_id"):
+            try: cloudinary.uploader.destroy(p["pic_public_id"], invalidate=True)
+            except Exception as e: logger.warning(f"Cloudinary destroy failed: {e}")
+    
+    # Clean up fav picture uploads
     for fp in (p or {}).get("fav_pictures", []):
+        if fp.get("url", "").startswith("/uploads/"):
+            try:
+                file_path = ROOT_DIR / fp["url"].lstrip("/")
+                if file_path.exists():
+                    file_path.unlink()
+            except Exception as e:
+                logger.warning(f"Local file delete failed: {e}")
         if fp.get("public_id"):
             try: cloudinary.uploader.destroy(fp["public_id"], invalidate=True)
             except Exception as e: logger.warning(f"Cloudinary fav destroy failed: {e}")
+    
     await db.profiles.delete_one({"id": pid, "user_id": user["id"]})
     return {"ok": True}
 
@@ -805,6 +896,10 @@ async def img_proxy(url: str):
 
 
 app.include_router(api_router)
+
+# Mount uploads directory for serving local files
+app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
+
 app.add_middleware(CORSMiddleware, allow_credentials=True,
                    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
                    allow_methods=["*"], allow_headers=["*"])
