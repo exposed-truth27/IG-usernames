@@ -12,7 +12,7 @@ import {
 import ProfileCard from "@/components/ProfileCard";
 import BulkImportDialog from "@/components/BulkImportDialog";
 import CopyDialog from "@/components/CopyDialog";
-import { ArrowDownAZ, ArrowUpAZ, ArrowDownUp, Copy, Download, LogOut, Plus, Search, ShieldCheck, Trash2, Upload, Clock, Clock3, RefreshCw, Users } from "lucide-react";
+import { ArrowDownAZ, ArrowUpAZ, ArrowDownUp, Copy, Download, LogOut, Plus, Search, ShieldCheck, Trash2, Upload, Clock, Clock3, RefreshCw, Users, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 
 const SORT_OPTIONS = [
