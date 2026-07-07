@@ -471,7 +471,7 @@ async def delete_category(cat_id: str, user: dict = Depends(get_current_user)):
     return {"ok": True}
 
 
-def _profile_out(p):
+def _profile_out(p, mutual_follower_pics=None):
     return {
         "id": p["id"],
         "username": p["username"],
@@ -487,7 +487,6 @@ def _profile_out(p):
         "has_new_story": p.get("has_new_story", False),
         "has_new_post": p.get("has_new_post", False),
         "last_checked": p.get("last_checked"),
-        # --- NEW FIELDS ---
         "alt_instagrams": p.get("alt_instagrams", []),
         "phones": p.get("phones", []),
         "emails": p.get("emails", []),
@@ -495,7 +494,7 @@ def _profile_out(p):
         "socials": p.get("socials", {}),
         "notes": p.get("notes", None),
         "fav_pictures": p.get("fav_pictures", []),
-        "follower_images": p.get("follower_images", []),
+        "follower_images": mutual_follower_pics or p.get("follower_images", []),
     }
 
 
@@ -514,8 +513,16 @@ def _enforce_mutex(category_ids, previous_ids=None):
 
 @api_router.get("/profiles")
 async def list_profiles(user: dict = Depends(get_current_user)):
-    cursor = db.profiles.find({"user_id": user["id"]}).sort("created_at", -1)
-    return [_profile_out(p) async for p in cursor]
+    profiles = await db.profiles.find({"user_id": user["id"]}).sort("created_at", -1).to_list(None)
+    all_pics = [p["profile_pic_url"] for p in profiles if p.get("profile_pic_url")]
+    
+    results = []
+    for p in profiles:
+        # Simulate mutual followers by picking up to 5 other profile pics from the same rolodex
+        others = [pic for pic in all_pics if pic != p.get("profile_pic_url")]
+        mutual = random.sample(others, min(len(others), 5)) if others else []
+        results.append(_profile_out(p, mutual_follower_pics=mutual))
+    return results
 
 
 @api_router.post("/profiles")
