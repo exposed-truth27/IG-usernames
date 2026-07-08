@@ -598,8 +598,11 @@ async def refresh_profile(pid: str, user: dict = Depends(get_current_user)):
     if got_pic and not is_manual:
         new_data["profile_pic_url"] = fetched["profile_pic_url"]
         new_data["pic_source"] = "fetched"
-    if new_data:
-        await db.profiles.update_one({"id": pid, "user_id": user["id"]}, {"$set": new_data})
+    
+    # Ensure we always record the check time
+    new_data["last_checked"] = datetime.now(timezone.utc).isoformat()
+    
+    await db.profiles.update_one({"id": pid, "user_id": user["id"]}, {"$set": new_data})
     return _profile_out({**p, **new_data})
 
 
