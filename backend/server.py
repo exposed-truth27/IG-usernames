@@ -11,8 +11,9 @@ UPLOADS_DIR.mkdir(exist_ok=True)
 import os
 import re
 import uuid
+import random
 import logging
-import shutil
+import httpx
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Annotated, Dict
