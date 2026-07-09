@@ -365,6 +365,52 @@ async def _provider_looter2(username, key):
                         data.get("is_verified", False), data.get("biography"))
 
 
+async def _provider_socialcrawl(username, _key):
+    # Integration for https://www.socialcrawl.dev/
+    api_key = os.environ.get("SOCIALCRAWL_API_KEY") or "sc_R961nwwAByMPW8rlbzAe7uuHxv677BI2bSgN-yfmKPE"
+    if not api_key: return {}
+    url = f"https://api.socialcrawl.dev/v1/instagram/profile/{username}"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as cx:
+            r = await cx.get(url, headers=headers)
+            if r.status_code != 200: return {}
+            data = r.json()
+            return _norm_result(data.get("username") or username, data.get("full_name"),
+                                data.get("profile_pic_url"), data.get("is_verified"), data.get("bio"))
+    except Exception: return {}
+
+async def _provider_scrapedo(username, _key):
+    # Integration for https://scrape.do/
+    api_key = os.environ.get("SCRAPEDO_API_KEY") or "80df8c4c0d5c42a8a2ea0986c28ca338270ba5f8ddd"
+    if not api_key: return {}
+    target = f"https://www.instagram.com/{username}/?__a=1&__d=dis"
+    url = f"https://api.scrape.do?token={api_key}&url={target}"
+    try:
+        async with httpx.AsyncClient(timeout=25.0) as cx:
+            r = await cx.get(url)
+            if r.status_code != 200: return {}
+            data = r.json()
+            u = data.get("graphql", {}).get("user", {})
+            return _norm_result(u.get("username") or username, u.get("full_name"),
+                                u.get("profile_pic_url_hd"), u.get("is_verified"), u.get("biography"))
+    except Exception: return {}
+
+async def _provider_scraping_bot(username, _key):
+    # Integration for http://api.scraping-bot.io/scrape
+    api_url = "http://api.scraping-bot.io/scrape"
+    auth = ("wbPFR3efHON15tODqUI95nprO", "")
+    payload = {"url": f"https://www.instagram.com/{username}/", "scraper": "instagramProfile"}
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as cx:
+            r = await cx.post(api_url, json=payload, auth=auth)
+            if r.status_code != 200: return {}
+            data = r.json()
+            if not isinstance(data, dict): return {}
+            return _norm_result(data.get("username") or username, data.get("fullName"),
+                                data.get("profilePicUrl"), data.get("isVerified", False), data.get("biography"))
+    except Exception: return {}
+
 async def _provider_public_web(username, _key):
     url = "https://i.instagram.com/api/v1/users/web_profile_info/"
     headers = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
@@ -384,10 +430,11 @@ async def _provider_public_web(username, _key):
                         user.get("is_verified", False), user.get("biography"))
 
 
-ALL_PROVIDERS = {"cheapest": _provider_cheapest, "media_api": _provider_media_api,
+ALL_PROVIDERS = {"socialcrawl": _provider_socialcrawl, "scrapedo": _provider_scrapedo,
+    "bot": _provider_scraping_bot, "cheapest": _provider_cheapest, "media_api": _provider_media_api,
     "profile1": _provider_profile1, "scraper_stable": _provider_scraper_stable,
     "scraper2": _provider_scraper2, "looter2": _provider_looter2, "public": _provider_public_web}
-DEFAULT_ORDER = "cheapest,media_api,profile1,scraper_stable,scraper2,looter2,public"
+DEFAULT_ORDER = "socialcrawl,scrapedo,bot,cheapest,media_api,profile1,scraper_stable,scraper2,looter2,public"
 
 
 async def fetch_instagram_profile(username):
