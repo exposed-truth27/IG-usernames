@@ -260,10 +260,10 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
   };
 
   return (
-    <div className={`relative bg-slate-800 border-2 border-[#B0B7BC] rounded-xl overflow-hidden group hover:border-white/40 transition-all duration-300 ${
+    <div className={`relative bg-slate-800 border-2 border-[#B0B7BC] rounded-xl overflow-hidden group transition-all duration-300 ${
       isFavorite 
-        ? "shadow-[0_0_20px_rgba(176,183,188,0.3)] hover:shadow-[0_0_30px_rgba(176,183,188,0.5)] border-white/40" 
-        : "shadow-lg hover:shadow-xl"
+        ? "shadow-[0_0_25px_rgba(224,225,226,0.6)] hover:shadow-[0_0_40px_rgba(224,225,226,0.8)] border-white/60 ring-2 ring-white/20" 
+        : "shadow-lg hover:shadow-xl hover:border-white/40"
     }`}>
       {/* ── Profile Header Section (Circle Avatar) ─────────────────────────── */}
       <div className="relative p-6 flex flex-col items-center bg-slate-900/40">
