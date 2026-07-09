@@ -388,11 +388,12 @@ async def _provider_scrapedo(username, _key):
     # Integration for https://scrape.do/
     api_key = os.environ.get("SCRAPEDO_API_KEY") or "80df8c4c0d5c42a8a2ea0986c28ca338270ba5f8ddd"
     if not api_key: return {}
+    # Use render=true to force scrape.do to wait for the data
     target = f"https://www.instagram.com/{username}/?__a=1&__d=dis"
-    url = f"https://api.scrape.do?token={api_key}&url={target}"
+    url = f"https://api.scrape.do?token={api_key}&url={target}&render=true"
     try:
-        async with httpx.AsyncClient(timeout=30.0) as cx:
-            for _ in range(3): # Retry up to 3 times for 201 status
+        async with httpx.AsyncClient(timeout=60.0) as cx:
+            for _ in range(3):
                 r = await cx.get(url)
                 if r.status_code == 200:
                     data = r.json()
@@ -402,7 +403,7 @@ async def _provider_scrapedo(username, _key):
                                             u.get("profile_pic_url_hd") or u.get("profile_pic_url"), 
                                             u.get("is_verified"), u.get("biography") or u.get("bio"))
                 elif r.status_code == 201:
-                    await asyncio.sleep(2) # Wait for processing
+                    await asyncio.sleep(5) # Wait longer for rendering
                     continue
                 else: break
     except Exception: pass
