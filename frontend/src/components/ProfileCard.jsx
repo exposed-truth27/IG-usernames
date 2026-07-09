@@ -331,11 +331,7 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
           </button>
         </div>
 
-        {isManual && (
-          <div className="absolute top-3 left-3 px-2 py-0.5 bg-black/60 backdrop-blur-sm text-[9px] font-mono text-white/80 rounded-lg flex items-center gap-1 border border-white/10">
-            <ImageIcon className="w-2.5 h-2.5" /> MANUAL
-          </div>
-        )}
+        {/* Manual tag removed */}
       </div>
 
       {/* ── Content Section ────────────────────────────────────────────────── */}
