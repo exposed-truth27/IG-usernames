@@ -441,6 +441,7 @@ async def fetch_instagram_profile(username):
     key = os.environ.get("RAPIDAPI_KEY", "")
     order = [x.strip() for x in os.environ.get("SCRAPER_ORDER", DEFAULT_ORDER).split(",") if x.strip()]
     last_err = None
+    best_result = {}
     for name in order:
         fn = ALL_PROVIDERS.get(name)
         if not fn:
@@ -452,9 +453,20 @@ async def fetch_instagram_profile(username):
             last_err = e
             continue
         if result and (result.get("profile_pic_url") or result.get("full_name") or result.get("bio")):
-            logger.info(f"[{name}] hit for {username} (pic={bool(result.get('profile_pic_url'))})")
-            return result
+            # If we found a picture, return immediately
+            if result.get("profile_pic_url"):
+                logger.info(f"[{name}] hit with PIC for {username}")
+                return result
+            # If we found data but no picture, store it as a fallback but keep looking for a picture
+            if not best_result:
+                logger.info(f"[{name}] hit with data but NO PIC for {username}, searching for pic...")
+                best_result = result
+            continue
         logger.info(f"[{name}] empty for {username}, trying next")
+    
+    if best_result:
+        logger.info(f"Returning best data found without picture for {username}")
+        return best_result
     logger.warning(f"All providers failed for {username}; last_err={last_err}")
     return {}
 
