@@ -119,6 +119,8 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
   // Manual tag removed as requested
   const hasUpdate = profile.has_new_story || profile.has_new_post;
   const isFavorite = (profile.category_ids || []).includes("__sys_favorite");
+  const isActive = (profile.category_ids || []).includes("__sys_active");
+  const isComplete = (profile.category_ids || []).includes("__sys_complete");
 
   const refresh = async () => {
     setBusy(true);
@@ -262,20 +264,24 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
   };
 
   return (
-    <div className={`relative bg-slate-800 border-2 border-[#B0B7BC] rounded-xl overflow-hidden group transition-all duration-300 ${
+    <div className={`relative bg-slate-800 border-2 border-[#B0B7BC] rounded-2xl overflow-hidden group transition-all duration-300 ${
       isFavorite 
-        ? "shadow-[0_0_40px_rgba(224,225,226,0.9)] hover:shadow-[0_0_60px_rgba(224,225,226,1.0)] border-white ring-4 ring-white/15" 
+        ? "shadow-[0_0_50px_rgba(224,225,226,0.95)] hover:shadow-[0_0_70px_rgba(224,225,226,1.0)] border-white ring-4 ring-white/20" 
         : "shadow-lg hover:shadow-xl hover:border-white/40"
     }`}>
       {/* ── Profile Header Section (Circle Avatar) ─────────────────────────── */}
       <div className="relative p-6 flex flex-col items-center bg-slate-900/40">
         {/* Profile Picture with Instagram-style ring (Online or Update) */}
         <div className="relative w-28 h-28 mb-4">
-          {(isOnline || hasUpdate) && (
-            <div className="absolute inset-[-5px] rounded-full z-0 animate-pulse" style={{
+          {(isOnline || hasUpdate || isActive || isComplete) && (
+            <div className="absolute inset-[-5px] rounded-full z-0" style={{
               background: isOnline 
                 ? 'conic-gradient(from 45deg, #feda75 0deg, #fa7e1e 40deg, #d92e7f 102deg, #9b36b7 169deg, #515bd4 180deg)'
-                : 'linear-gradient(45deg, #f09433 0%, #e6683c 25%, #dc2743 50%, #cc2366 75%, #bc1888 100%)',
+                : hasUpdate
+                ? 'linear-gradient(45deg, #f09433 0%, #e6683c 25%, #dc2743 50%, #cc2366 75%, #bc1888 100%)'
+                : isActive
+                ? '#22c55e'
+                : '#000000',
               padding: '3px'
             }}>
               <div className="absolute inset-[2px] bg-slate-900 rounded-full" />
