@@ -137,8 +137,9 @@ class ProfileUpdate(BaseModel):
     alt_instagrams: Optional[List[str]] = None
     phones: Optional[List[str]] = None
     emails: Optional[List[str]] = None
-    socials: Optional[SocialsModel] = None
+    socials: Optional[Socials] = None
     notes: Optional[str] = None
+    mutual_follower_ids: Optional[List[str]] = None
 
 class PictureUrlIn(BaseModel):
     url: HttpUrl
@@ -375,9 +376,12 @@ async def _provider_socialcrawl(username, _key):
         async with httpx.AsyncClient(timeout=20.0) as cx:
             r = await cx.get(url, headers=headers)
             if r.status_code != 200: return {}
-            data = r.json()
+            raw = r.json()
+            # SocialCrawl often nests data under a 'data' key
+            data = raw.get("data") if isinstance(raw.get("data"), dict) else raw
             return _norm_result(data.get("username") or username, data.get("full_name"),
-                                data.get("profile_pic_url"), data.get("is_verified"), data.get("bio"))
+                                data.get("profile_pic_url") or data.get("profile_pic"), 
+                                data.get("is_verified"), data.get("bio") or data.get("biography"))
     except Exception: return {}
 
 async def _provider_scrapedo(username, _key):
@@ -391,9 +395,12 @@ async def _provider_scrapedo(username, _key):
             r = await cx.get(url)
             if r.status_code != 200: return {}
             data = r.json()
-            u = data.get("graphql", {}).get("user", {})
-            return _norm_result(u.get("username") or username, u.get("full_name"),
-                                u.get("profile_pic_url_hd"), u.get("is_verified"), u.get("biography"))
+            # Scrape.do returns either graphql or a direct user object
+            u = data.get("graphql", {}).get("user") or data.get("user") or data
+            if not isinstance(u, dict): return {}
+            return _norm_result(u.get("username") or username, u.get("full_name") or u.get("name"),
+                                u.get("profile_pic_url_hd") or u.get("profile_pic_url"), 
+                                u.get("is_verified"), u.get("biography") or u.get("bio"))
     except Exception: return {}
 
 async def _provider_scraping_bot(username, _key):
@@ -437,38 +444,57 @@ ALL_PROVIDERS = {"socialcrawl": _provider_socialcrawl, "scrapedo": _provider_scr
 DEFAULT_ORDER = "socialcrawl,scrapedo,bot,cheapest,media_api,profile1,scraper_stable,scraper2,looter2,public"
 
 
-async def fetch_instagram_profile(username):
+async def fetch_instagram_profile(username, download=False, user_id=None, profile_id=None):
     key = os.environ.get("RAPIDAPI_KEY", "")
     order = [x.strip() for x in os.environ.get("SCRAPER_ORDER", DEFAULT_ORDER).split(",") if x.strip()]
     last_err = None
     best_result = {}
+    
     for name in order:
         fn = ALL_PROVIDERS.get(name)
-        if not fn:
-            continue
+        if not fn: continue
         try:
             result = await fn(username, key)
+            if result and (result.get("profile_pic_url") or result.get("full_name") or result.get("bio")):
+                # If we found a picture, download it locally if requested
+                pic_url = result.get("profile_pic_url")
+                if pic_url and download and user_id and profile_id:
+                    try:
+                        local_url = await download_profile_pic(pic_url, user_id, profile_id)
+                        if local_url:
+                            result["profile_pic_url"] = local_url
+                            result["pic_source"] = "manual" # Treat as local
+                    except Exception as e:
+                        logger.warning(f"Auto-download failed: {e}")
+                
+                if result.get("profile_pic_url"):
+                    return result
+                if not best_result:
+                    best_result = result
+                continue
         except Exception as e:
-            logger.exception(f"[{name}] exception: {e}")
+            logger.warning(f"[{name}] failed: {e}")
             last_err = e
-            continue
-        if result and (result.get("profile_pic_url") or result.get("full_name") or result.get("bio")):
-            # If we found a picture, return immediately
-            if result.get("profile_pic_url"):
-                logger.info(f"[{name}] hit with PIC for {username}")
-                return result
-            # If we found data but no picture, store it as a fallback but keep looking for a picture
-            if not best_result:
-                logger.info(f"[{name}] hit with data but NO PIC for {username}, searching for pic...")
-                best_result = result
-            continue
-        logger.info(f"[{name}] empty for {username}, trying next")
+            
+    return best_result or {}
+
+async def download_profile_pic(url, user_id, profile_id):
+    """Download an external image and save it locally to prevent expiration"""
+    user_dir = UPLOADS_DIR / str(user_id)
+    user_dir.mkdir(exist_ok=True)
+    file_path = user_dir / f"{profile_id}_auto.jpg"
     
-    if best_result:
-        logger.info(f"Returning best data found without picture for {username}")
-        return best_result
-    logger.warning(f"All providers failed for {username}; last_err={last_err}")
-    return {}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"}
+    try:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as cx:
+            r = await cx.get(url, headers=headers)
+            if r.status_code == 200:
+                with open(file_path, "wb") as f:
+                    f.write(r.content)
+                return f"/uploads/{user_id}/{profile_id}_auto.jpg"
+    except Exception as e:
+        logger.warning(f"Download failed: {e}")
+    return None
 
 
 @api_router.post("/auth/login")
@@ -578,9 +604,14 @@ async def list_profiles(user: dict = Depends(get_current_user)):
     
     results = []
     for p in profiles:
-        # Simulate mutual followers by picking up to 5 other profile pics from the same rolodex
-        others = [pic for pic in all_pics if pic != p.get("profile_pic_url")]
-        mutual = random.sample(others, min(len(others), 5)) if others else []
+        # Get actual follower pics based on manual selection
+        follower_ids = p.get("mutual_follower_ids", [])
+        mutual = []
+        if follower_ids:
+            for f_id in follower_ids:
+                f_prof = next((x for x in profiles if x["id"] == f_id), None)
+                if f_prof and f_prof.get("profile_pic_url"):
+                    mutual.append(f_prof["profile_pic_url"])
         results.append(_profile_out(p, mutual_follower_pics=mutual))
     return results
 
@@ -631,6 +662,8 @@ async def update_profile(pid: str, payload: ProfileUpdate, user: dict = Depends(
         update["socials"] = {k: v for k, v in payload.socials.model_dump().items() if v is not None}
     if payload.notes is not None:
         update["notes"] = payload.notes.strip() or None
+    if payload.mutual_follower_ids is not None:
+        update["mutual_follower_ids"] = payload.mutual_follower_ids
     if not update:
         return _profile_out(p)
     await db.profiles.update_one({"id": pid, "user_id": user["id"]}, {"$set": update})
@@ -642,7 +675,8 @@ async def refresh_profile(pid: str, user: dict = Depends(get_current_user)):
     p = await db.profiles.find_one({"id": pid, "user_id": user["id"]})
     if not p:
         raise HTTPException(status_code=404, detail="Profile not found")
-    fetched = await fetch_instagram_profile(p["username"])
+    # Auto-download picture during refresh to prevent link expiration
+    fetched = await fetch_instagram_profile(p["username"], download=True, user_id=user["id"], profile_id=p["id"])
     if not fetched:
         raise HTTPException(status_code=502, detail="All scrapers failed. Try a manual picture or come back later.")
     new_data = {}
@@ -652,15 +686,14 @@ async def refresh_profile(pid: str, user: dict = Depends(get_current_user)):
         new_data["bio"] = fetched["bio"]
     if "is_verified" in fetched:
         new_data["is_verified"] = bool(fetched["is_verified"])
+    
     is_manual = p.get("pic_source") == "manual"
     got_pic = bool(fetched.get("profile_pic_url"))
     if got_pic and not is_manual:
         new_data["profile_pic_url"] = fetched["profile_pic_url"]
-        new_data["pic_source"] = "fetched"
+        new_data["pic_source"] = fetched.get("pic_source", "fetched")
     
-    # Ensure we always record the check time
     new_data["last_checked"] = datetime.now(timezone.utc).isoformat()
-    
     await db.profiles.update_one({"id": pid, "user_id": user["id"]}, {"$set": new_data})
     return _profile_out({**p, **new_data})
 
@@ -964,21 +997,17 @@ async def img_proxy(url: str):
         raise HTTPException(status_code=400, detail="Invalid url")
     if "res.cloudinary.com" in url:
         return Response(status_code=302, headers={"Location": url})
+    # Simplified headers to avoid Instagram blocks
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.instagram.com/",
-        "Sec-Fetch-Dest": "image",
-        "Sec-Fetch-Mode": "no-cors",
-        "Sec-Fetch-Site": "cross-site",
+        "Accept": "image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
     }
     try:
-        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, verify=False) as cx:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as cx:
             r = await cx.get(url, headers=headers)
             if r.status_code != 200:
-                # If direct fetch fails, try one more time without referer
-                headers.pop("Referer", None)
+                # Fallback: try with a mobile user agent
+                headers["User-Agent"] = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
                 r = await cx.get(url, headers=headers)
                 if r.status_code != 200:
                     raise HTTPException(status_code=502, detail=f"Upstream image error: {r.status_code}")
