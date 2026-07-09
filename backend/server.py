@@ -388,7 +388,6 @@ async def _provider_scrapedo(username, _key):
     # Integration for https://scrape.do/
     api_key = os.environ.get("SCRAPEDO_API_KEY") or "80df8c4c0d5c42a8a2ea0986c28ca338270ba5f8ddd"
     if not api_key: return {}
-    # Use render=true to force scrape.do to wait for the data
     target = f"https://www.instagram.com/{username}/?__a=1&__d=dis"
     url = f"https://api.scrape.do?token={api_key}&url={target}&render=true"
     try:
@@ -396,14 +395,21 @@ async def _provider_scrapedo(username, _key):
             for _ in range(3):
                 r = await cx.get(url)
                 if r.status_code == 200:
-                    data = r.json()
-                    u = data.get("graphql", {}).get("user") or data.get("user") or data
-                    if isinstance(u, dict):
-                        return _norm_result(u.get("username") or username, u.get("full_name") or u.get("name"),
-                                            u.get("profile_pic_url_hd") or u.get("profile_pic_url"), 
-                                            u.get("is_verified"), u.get("biography") or u.get("bio"))
+                    try:
+                        data = r.json()
+                        u = data.get("graphql", {}).get("user") or data.get("user") or data
+                        if isinstance(u, dict):
+                            return _norm_result(u.get("username") or username, u.get("full_name") or u.get("name"),
+                                                u.get("profile_pic_url_hd") or u.get("profile_pic_url"), 
+                                                u.get("is_verified"), u.get("biography") or u.get("bio"))
+                    except:
+                        # Fallback: Scrape HTML if JSON fails
+                        pic_match = re.search(r'"profile_pic_url_hd":"([^"]+)"', r.text)
+                        if pic_match:
+                            pic = pic_match.group(1).replace("\\u0026", "&")
+                            return _norm_result(username, "", pic)
                 elif r.status_code == 201:
-                    await asyncio.sleep(5) # Wait longer for rendering
+                    await asyncio.sleep(5)
                     continue
                 else: break
     except Exception: pass
