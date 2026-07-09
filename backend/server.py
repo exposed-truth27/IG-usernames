@@ -373,11 +373,11 @@ async def _provider_socialcrawl(username, _key):
     url = f"https://api.socialcrawl.dev/v1/instagram/profile/{username}"
     headers = {"Authorization": f"Bearer {api_key}"}
     try:
-        async with httpx.AsyncClient(timeout=20.0) as cx:
+        # Use verify=False to bypass SSL 525 errors
+        async with httpx.AsyncClient(timeout=20.0, verify=False) as cx:
             r = await cx.get(url, headers=headers)
             if r.status_code != 200: return {}
             raw = r.json()
-            # SocialCrawl often nests data under a 'data' key
             data = raw.get("data") if isinstance(raw.get("data"), dict) else raw
             return _norm_result(data.get("username") or username, data.get("full_name"),
                                 data.get("profile_pic_url") or data.get("profile_pic"), 
@@ -391,18 +391,22 @@ async def _provider_scrapedo(username, _key):
     target = f"https://www.instagram.com/{username}/?__a=1&__d=dis"
     url = f"https://api.scrape.do?token={api_key}&url={target}"
     try:
-        async with httpx.AsyncClient(timeout=25.0) as cx:
-            r = await cx.get(url)
-            # Scrape.do can return 200 or 201
-            if r.status_code not in [200, 201]: return {}
-            data = r.json()
-            # Scrape.do returns either graphql or a direct user object
-            u = data.get("graphql", {}).get("user") or data.get("user") or data
-            if not isinstance(u, dict): return {}
-            return _norm_result(u.get("username") or username, u.get("full_name") or u.get("name"),
-                                u.get("profile_pic_url_hd") or u.get("profile_pic_url"), 
-                                u.get("is_verified"), u.get("biography") or u.get("bio"))
-    except Exception: return {}
+        async with httpx.AsyncClient(timeout=30.0) as cx:
+            for _ in range(3): # Retry up to 3 times for 201 status
+                r = await cx.get(url)
+                if r.status_code == 200:
+                    data = r.json()
+                    u = data.get("graphql", {}).get("user") or data.get("user") or data
+                    if isinstance(u, dict):
+                        return _norm_result(u.get("username") or username, u.get("full_name") or u.get("name"),
+                                            u.get("profile_pic_url_hd") or u.get("profile_pic_url"), 
+                                            u.get("is_verified"), u.get("biography") or u.get("bio"))
+                elif r.status_code == 201:
+                    await asyncio.sleep(2) # Wait for processing
+                    continue
+                else: break
+    except Exception: pass
+    return {}
 
 async def _provider_scraping_bot(username, _key):
     # Integration for http://api.scraping-bot.io/scrape
