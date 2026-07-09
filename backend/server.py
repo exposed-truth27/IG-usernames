@@ -393,7 +393,8 @@ async def _provider_scrapedo(username, _key):
     try:
         async with httpx.AsyncClient(timeout=25.0) as cx:
             r = await cx.get(url)
-            if r.status_code != 200: return {}
+            # Scrape.do can return 200 or 201
+            if r.status_code not in [200, 201]: return {}
             data = r.json()
             # Scrape.do returns either graphql or a direct user object
             u = data.get("graphql", {}).get("user") or data.get("user") or data
