@@ -430,24 +430,33 @@ async def _provider_public_web(username, _key):
                "x-ig-app-id": "936619743392459", "Accept": "*/*"}
     async with httpx.AsyncClient(timeout=15.0) as cx:
         r = await cx.get(url, params={"username": username}, headers=headers)
-        if r.status_code != 200:
-            return {}
-        try:
-            data = r.json()
-        except Exception:
-            return {}
-    user = (((data or {}).get("data") or {}).get("user")) or {}
-    if not user:
-        return {}
-    return _norm_result(user.get("username") or username, user.get("full_name"), _pick_pic(user),
-                        user.get("is_verified", False), user.get("biography"))
+        if r.status_code == 200:
+            try:
+                data = r.json()
+                user = (((data or {}).get("data") or {}).get("user")) or {}
+                if user:
+                    return _norm_result(user.get("username") or username, user.get("full_name"), _pick_pic(user),
+                                        user.get("is_verified", False), user.get("biography"))
+            except Exception: pass
+    
+    # Stealth Fallback: Try public meta tags
+    try:
+        url = f"https://www.instagram.com/{username}/"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"}
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            r = await client.get(url, headers=headers)
+            if r.status_code == 200:
+                pic_match = re.search(r'<meta property="og:image" content="([^"]+)"', r.text)
+                if pic_match: return _norm_result(username, "", pic_match.group(1))
+    except Exception: pass
+    return {}
 
 
 ALL_PROVIDERS = {"socialcrawl": _provider_socialcrawl, "scrapedo": _provider_scrapedo,
     "bot": _provider_scraping_bot, "cheapest": _provider_cheapest, "media_api": _provider_media_api,
     "profile1": _provider_profile1, "scraper_stable": _provider_scraper_stable,
     "scraper2": _provider_scraper2, "looter2": _provider_looter2, "public": _provider_public_web}
-DEFAULT_ORDER = "socialcrawl,scrapedo,bot,cheapest,media_api,profile1,scraper_stable,scraper2,looter2,public"
+DEFAULT_ORDER = "public,socialcrawl,scrapedo,bot,cheapest,media_api,profile1,scraper_stable,scraper2"
 
 
 async def fetch_instagram_profile(username, download=False, user_id=None, profile_id=None):
