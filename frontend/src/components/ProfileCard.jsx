@@ -90,6 +90,7 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
   const [editEmails, setEditEmails] = useState(profile.emails || []);
   const [editSocials, setEditSocials] = useState(profile.socials || {});
   const [editNotes, setEditNotes] = useState(profile.notes || "");
+  const [editFollowerIds, setEditFollowerIds] = useState(profile.mutual_follower_ids || []);
   const [savingEdit, setSavingEdit] = useState(false);
 
   const [favOpen, setFavOpen] = useState(false);
@@ -187,6 +188,7 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
         emails: editEmails,
         socials: editSocials,
         notes: editNotes,
+        mutual_follower_ids: editFollowerIds,
       };
       const { data } = await api.patch(`/profiles/${profile.id}`, payload);
       onChange(data);
@@ -262,7 +264,7 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
   return (
     <div className={`relative bg-slate-800 border-2 border-[#B0B7BC] rounded-xl overflow-hidden group transition-all duration-300 ${
       isFavorite 
-        ? "shadow-[0_0_25px_rgba(224,225,226,0.6)] hover:shadow-[0_0_40px_rgba(224,225,226,0.8)] border-white/60 ring-2 ring-white/20" 
+        ? "shadow-[0_0_40px_rgba(224,225,226,0.9)] hover:shadow-[0_0_60px_rgba(224,225,226,1.0)] border-white ring-4 ring-white/15" 
         : "shadow-lg hover:shadow-xl hover:border-white/40"
     }`}>
       {/* ── Profile Header Section (Circle Avatar) ─────────────────────────── */}
@@ -787,6 +789,26 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
                 <label className="font-mono text-[10px] uppercase tracking-[0.25em] text-slate-400 mb-2 block font-black">Private Intelligence</label>
                 <Textarea value={editNotes} onChange={(e) => setEditNotes(e.target.value)} placeholder="Add internal intelligence here..."
                   className="bg-slate-900 border-slate-600 rounded-xl min-h-[120px] text-sm focus-visible:ring-[#0076B6] leading-relaxed italic font-bold" />
+              </div>
+
+              <div>
+                <label className="font-mono text-[10px] uppercase tracking-[0.25em] text-slate-400 mb-2 block font-black">Mutual Followers (From Rolodex)</label>
+                <div className="grid grid-cols-1 gap-2 max-h-40 overflow-y-auto p-3 bg-slate-900 rounded-xl border border-slate-700">
+                  {(categories.find(c => c.id === "__all")?.profiles || []).filter(p => p.id !== profile.id).map(p => (
+                    <label key={p.id} className="flex items-center gap-3 text-xs text-slate-300 cursor-pointer hover:bg-slate-800 p-1.5 rounded-lg transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={editFollowerIds.includes(p.id)}
+                        onChange={(e) => {
+                          if (e.target.checked) setEditFollowerIds([...editFollowerIds, p.id]);
+                          else setEditFollowerIds(editFollowerIds.filter(id => id !== p.id));
+                        }}
+                        className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-[#0076B6] focus:ring-[#0076B6]"
+                      />
+                      <span className="truncate font-mono">@{p.username}</span>
+                    </label>
+                  ))}
+                </div>
               </div>
             </div>
           </div>
