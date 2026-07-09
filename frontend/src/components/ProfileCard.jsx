@@ -115,7 +115,7 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
 
   const initials = (profile.username || "?").slice(0, 2).toUpperCase();
   const igUrl = `https://instagram.com/${profile.username}`;
-  const isManual = profile.pic_source === "manual";
+  // Manual tag removed as requested
   const hasUpdate = profile.has_new_story || profile.has_new_post;
   const isFavorite = (profile.category_ids || []).includes("__sys_favorite");
 
