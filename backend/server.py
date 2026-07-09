@@ -964,16 +964,31 @@ async def img_proxy(url: str):
         raise HTTPException(status_code=400, detail="Invalid url")
     if "res.cloudinary.com" in url:
         return Response(status_code=302, headers={"Location": url})
-    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-               "Referer": "https://www.instagram.com/"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.instagram.com/",
+        "Sec-Fetch-Dest": "image",
+        "Sec-Fetch-Mode": "no-cors",
+        "Sec-Fetch-Site": "cross-site",
+    }
     try:
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as cx:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, verify=False) as cx:
             r = await cx.get(url, headers=headers)
             if r.status_code != 200:
-                raise HTTPException(status_code=502, detail="Upstream image error")
+                # If direct fetch fails, try one more time without referer
+                headers.pop("Referer", None)
+                r = await cx.get(url, headers=headers)
+                if r.status_code != 200:
+                    raise HTTPException(status_code=502, detail=f"Upstream image error: {r.status_code}")
+            
             return Response(content=r.content,
                             media_type=r.headers.get("content-type", "image/jpeg"),
-                            headers={"Cache-Control": "public, max-age=86400"})
+                            headers={
+                                "Cache-Control": "public, max-age=86400",
+                                "Access-Control-Allow-Origin": "*"
+                            })
     except HTTPException:
         raise
     except Exception:
