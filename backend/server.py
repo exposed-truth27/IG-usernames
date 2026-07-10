@@ -137,7 +137,7 @@ class ProfileUpdate(BaseModel):
     alt_instagrams: Optional[List[str]] = None
     phones: Optional[List[str]] = None
     emails: Optional[List[str]] = None
-    socials: Optional[Socials] = None
+    socials: Optional[SocialsModel] = None
     notes: Optional[str] = None
     mutual_follower_ids: Optional[List[str]] = None
 
@@ -430,22 +430,45 @@ async def _provider_scraping_bot(username, _key):
                                 data.get("profilePicUrl"), data.get("isVerified", False), data.get("biography"))
     except Exception: return {}
 
-async def _provider_public_web(username, _key):
-    url = "https://i.instagram.com/api/v1/users/web_profile_info/"
-    headers = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
-               "x-ig-app-id": "936619743392459", "Accept": "*/*"}
-    async with httpx.AsyncClient(timeout=15.0) as cx:
-        r = await cx.get(url, params={"username": username}, headers=headers)
-        if r.status_code == 200:
-            try:
+async def _provider_downloader_style(username, _key):
+    """Mimics the logic of sites like Publer by using specific public endpoints and viewer patterns"""
+    # Pattern 1: GraphQL Public Endpoint (Very common for downloaders)
+    try:
+        url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={username}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "x-ig-app-id": "936619743392459",
+            "x-requested-with": "XMLHttpRequest",
+            "Accept": "*/*",
+            "Referer": f"https://www.instagram.com/{username}/"
+        }
+        async with httpx.AsyncClient(timeout=15.0) as cx:
+            r = await cx.get(url, headers=headers)
+            if r.status_code == 200:
                 data = r.json()
-                user = (((data or {}).get("data") or {}).get("user")) or {}
+                user = data.get("data", {}).get("user", {})
                 if user:
-                    return _norm_result(user.get("username") or username, user.get("full_name"), _pick_pic(user),
-                                        user.get("is_verified", False), user.get("biography"))
-            except Exception: pass
-    
-    # Stealth Fallback: Try public meta tags
+                    return _norm_result(username, user.get("full_name"), user.get("profile_pic_url_hd") or user.get("profile_pic_url"),
+                                        user.get("is_verified"), user.get("biography"))
+    except Exception: pass
+
+    # Pattern 2: Public Viewer Pattern (Stealth)
+    try:
+        url = f"https://www.instagram.com/{username}/?__a=1&__d=dis"
+        headers = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"}
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as cx:
+            r = await cx.get(url, headers=headers)
+            if r.status_code == 200:
+                data = r.json()
+                user = data.get("graphql", {}).get("user", {}) or data.get("items", [{}])[0].get("user", {})
+                if user:
+                    return _norm_result(username, user.get("full_name"), user.get("profile_pic_url_hd") or user.get("profile_pic_url"),
+                                        user.get("is_verified"), user.get("biography"))
+    except Exception: pass
+    return {}
+
+async def _provider_public_web(username, _key):
+    # Try public meta tags as a last resort
     try:
         url = f"https://www.instagram.com/{username}/"
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"}
@@ -453,16 +476,18 @@ async def _provider_public_web(username, _key):
             r = await client.get(url, headers=headers)
             if r.status_code == 200:
                 pic_match = re.search(r'<meta property="og:image" content="([^"]+)"', r.text)
-                if pic_match: return _norm_result(username, "", pic_match.group(1))
+                name_match = re.search(r'<meta property="og:title" content="([^"]+)"', r.text)
+                name = name_match.group(1).split(" (@")[0] if name_match else ""
+                if pic_match: return _norm_result(username, name, pic_match.group(1))
     except Exception: pass
     return {}
 
 
-ALL_PROVIDERS = {"socialcrawl": _provider_socialcrawl, "scrapedo": _provider_scrapedo,
+ALL_PROVIDERS = {"downloader": _provider_downloader_style, "socialcrawl": _provider_socialcrawl, "scrapedo": _provider_scrapedo,
     "bot": _provider_scraping_bot, "cheapest": _provider_cheapest, "media_api": _provider_media_api,
     "profile1": _provider_profile1, "scraper_stable": _provider_scraper_stable,
     "scraper2": _provider_scraper2, "looter2": _provider_looter2, "public": _provider_public_web}
-DEFAULT_ORDER = "public,socialcrawl,scrapedo,bot,cheapest,media_api,profile1,scraper_stable,scraper2"
+DEFAULT_ORDER = "downloader,public,socialcrawl,scrapedo,bot,cheapest,media_api,profile1,scraper_stable,scraper2"
 
 
 async def fetch_instagram_profile(username, download=False, user_id=None, profile_id=None):
