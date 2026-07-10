@@ -215,8 +215,12 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
       onChange(data);
       setEditOpen(false);
       toast.success("Profile updated");
-    } catch { toast.error("Save failed"); }
-    finally { setSavingEdit(false); }
+    } catch (err) {
+      console.error("Save error:", err);
+      toast.error(err.response?.data?.detail || "Save failed");
+    } finally {
+      setSavingEdit(false);
+    }
   };
 
   const addFavUrl = async () => {
