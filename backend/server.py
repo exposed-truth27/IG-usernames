@@ -441,16 +441,28 @@ async def _provider_downloader_style(username, _key):
             r = await cx.get(url)
             if r.status_code == 200:
                 # Extract data from the fully rendered HTML
-                pic_match = re.search(r'"profile_pic_url_hd":"([^"]+)"', r.text)
-                if not pic_match:
-                    pic_match = re.search(r'"profile_pic_url":"([^"]+)"', r.text)
+                # Look for the absolute highest resolution possible (1080px or HD)
+                pic = None
+                pic_patterns = [
+                    r'"profile_pic_url_hd":"([^"]+)"',
+                    r'"profile_pic_url":"([^"]+)"',
+                    r'"hd_profile_pic_url_info":\{"url":"([^"]+)"',
+                    r'<meta property="og:image" content="([^"]+)"'
+                ]
+                for pattern in pic_patterns:
+                    match = re.search(pattern, r.text)
+                    if match:
+                        pic = match.group(1).replace("\\u0026", "&").replace("\\", "")
+                        # If we find an s150x150 or similar, try to upgrade it to a higher resolution
+                        if "s150x150" in pic:
+                            pic = pic.replace("s150x150", "s1080x1080")
+                        break
                 
                 name_match = re.search(r'"full_name":"([^"]+)"', r.text)
                 bio_match = re.search(r'"biography":"([^"]+)"', r.text)
                 verified_match = re.search(r'"is_verified":([^,}]+)', r.text)
                 
-                if pic_match:
-                    pic = pic_match.group(1).replace("\\u0026", "&").replace("\\", "")
+                if pic:
                     name = name_match.group(1).replace("\\", "") if name_match else ""
                     bio = bio_match.group(1).replace("\\n", "\n").replace("\\", "") if bio_match else ""
                     is_verified = "true" in (verified_match.group(1).lower() if verified_match else "false")
