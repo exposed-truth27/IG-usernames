@@ -730,20 +730,48 @@ async def import_profile_html(pid: str, payload: HtmlImportIn, user: dict = Depe
     if not p: raise HTTPException(status_code=404, detail="Profile not found")
     
     html = payload.html
-    # Robust extraction from raw HTML
-    pic_match = re.search(r'"profile_pic_url_hd":"([^"]+)"', html) or re.search(r'"profile_pic_url":"([^"]+)"', html)
-    name_match = re.search(r'"full_name":"([^"]+)"', html)
-    bio_match = re.search(r'"biography":"([^"]+)"', html)
+    # Ultra-robust extraction with multiple fallback patterns
+    pic = None
+    pic_patterns = [
+        r'"profile_pic_url_hd":"([^"]+)"',
+        r'"profile_pic_url":"([^"]+)"',
+        r'<meta property="og:image" content="([^"]+)"',
+        r'profile_pic_url_hd\\":\\"([^\\"]+)\\"',
+        r'profile_pic_url\\":\\"([^\\"]+)\\"'
+    ]
+    for pattern in pic_patterns:
+        match = re.search(pattern, html)
+        if match:
+            pic = match.group(1).replace("\\u0026", "&").replace("\\", "")
+            break
+            
+    name = None
+    name_patterns = [r'"full_name":"([^"]+)"', r'full_name\\":\\"([^\\"]+)\\"', r'<meta property="og:title" content="([^"]+)']
+    for pattern in name_patterns:
+        match = re.search(pattern, html)
+        if match:
+            name = match.group(1).replace("\\", "").split(" (@")[0]
+            break
+            
+    bio = None
+    bio_patterns = [r'"biography":"([^"]+)"', r'biography\\":\\"([^\\"]+)\\"', r'<meta property="og:description" content="([^"]+)']
+    for pattern in bio_patterns:
+        match = re.search(pattern, html)
+        if match:
+            bio = match.group(1).replace("\\n", "\n").replace("\\", "")
+            break
     
-    pic = pic_match.group(1).replace("\\u0026", "&") if pic_match else None
+    if not pic and not name:
+        raise HTTPException(status_code=400, detail="Could not find any profile data in the HTML. Make sure you copied the entire page source.")
+
     if pic:
         local_url = await download_profile_pic(pic, user["id"], p["id"])
         if local_url: pic = local_url
 
     new_data = {
-        "full_name": name_match.group(1) if name_match else p.get("full_name"),
+        "full_name": name or p.get("full_name"),
         "profile_pic_url": pic or p.get("profile_pic_url"),
-        "bio": bio_match.group(1) if bio_match else p.get("bio"),
+        "bio": bio or p.get("bio"),
         "last_checked": datetime.now(timezone.utc).isoformat()
     }
     await db.profiles.update_one({"id": pid, "user_id": user["id"]}, {"$set": new_data})
