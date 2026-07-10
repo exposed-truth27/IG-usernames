@@ -92,6 +92,9 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
   const [editNotes, setEditNotes] = useState(profile.notes || "");
   const [editFollowerIds, setEditFollowerIds] = useState(profile.mutual_follower_ids || []);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [importHtmlOpen, setImportHtmlOpen] = useState(false);
+  const [pastedHtml, setPastedHtml] = useState("");
+  const [importingHtml, setImportingHtml] = useState(false);
 
   const [favOpen, setFavOpen] = useState(false);
   const [favPictures, setFavPictures] = useState(profile.fav_pictures || []);
@@ -157,6 +160,22 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
       toast.success("Photo uploaded");
     } catch { toast.error("Upload failed"); }
     finally { setUploading(false); }
+  };
+
+  const importHtml = async () => {
+    if (!pastedHtml.trim()) return;
+    setImportingHtml(true);
+    try {
+      const { data } = await api.post(`/profiles/${profile.id}/import-html`, { html: pastedHtml });
+      onChange(data);
+      setImportHtmlOpen(false);
+      setPastedHtml("");
+      toast.success("Data imported from HTML");
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Import failed");
+    } finally {
+      setImportingHtml(false);
+    }
   };
 
   const removePic = async () => {
@@ -861,6 +880,37 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
                 <span className="font-black uppercase tracking-widest text-xs">Purge Image</span>
               </Button>
             )}
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center"><span className="w-full border-t-2 border-slate-700" /></div>
+              <div className="relative flex justify-center text-[10px] uppercase tracking-[0.4em] font-black"><span className="bg-slate-800 px-4 text-slate-500">OR</span></div>
+            </div>
+            <Button onClick={() => { setPicOpen(false); setImportHtmlOpen(true); }} variant="outline" className="w-full h-14 rounded-xl border-2 border-slate-600 border-dashed text-slate-300 hover:bg-slate-700 hover:border-[#B0B7BC] transition-all">
+              <LinkIcon className="w-5 h-5 mr-3 text-[#0076B6]" />
+              <span className="font-bold uppercase tracking-widest text-xs">Import from Instagram HTML</span>
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* HTML Import Dialog */}
+      <Dialog open={importHtmlOpen} onOpenChange={setImportHtmlOpen}>
+        <DialogContent className="bg-slate-800 border-2 border-[#B0B7BC] rounded-2xl sm:max-w-xl shadow-2xl">
+          <DialogHeader>
+            <DialogTitle className="font-display text-xl font-black uppercase tracking-tight text-white">Paste Instagram HTML</DialogTitle>
+            <DialogDescription className="text-slate-400 font-mono text-[10px] uppercase tracking-widest leading-relaxed">
+              Right-click the profile page on Instagram, select "View Page Source", Copy everything (Ctrl+A, Ctrl+C), and Paste it below.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <Textarea 
+              value={pastedHtml} 
+              onChange={(e) => setPastedHtml(e.target.value)} 
+              placeholder="Paste raw HTML here..."
+              className="bg-slate-900 border-slate-600 rounded-xl min-h-[300px] text-[10px] font-mono focus-visible:ring-[#0076B6]"
+            />
+            <Button onClick={importHtml} disabled={importingHtml || !pastedHtml.trim()} className="w-full h-12 rounded-xl bg-[#0076B6] hover:bg-[#0089d3] font-black uppercase tracking-widest">
+              {importingHtml ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : "Process HTML & Update Profile"}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
