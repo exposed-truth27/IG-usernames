@@ -696,25 +696,56 @@ async def refresh_profile(pid: str, user: dict = Depends(get_current_user)):
     p = await db.profiles.find_one({"id": pid, "user_id": user["id"]})
     if not p:
         raise HTTPException(status_code=404, detail="Profile not found")
-    # Auto-download picture during refresh to prevent link expiration
-    fetched = await fetch_instagram_profile(p["username"], download=True, user_id=user["id"], profile_id=p["id"])
-    if not fetched:
-        raise HTTPException(status_code=502, detail="All scrapers failed. Try a manual picture or come back later.")
-    new_data = {}
-    if fetched.get("full_name"):
-        new_data["full_name"] = fetched["full_name"]
-    if fetched.get("bio"):
-        new_data["bio"] = fetched["bio"]
-    if "is_verified" in fetched:
-        new_data["is_verified"] = bool(fetched["is_verified"])
+    try:
+        # Auto-download picture during refresh to prevent link expiration
+        fetched = await fetch_instagram_profile(p["username"], download=True, user_id=user["id"], profile_id=p["id"])
+        if not fetched:
+            raise HTTPException(status_code=502, detail="All scrapers failed. Instagram might be blocking requests. Try 'Paste HTML' in Edit panel.")
+        
+        new_data = {}
+        if fetched.get("full_name"): new_data["full_name"] = fetched["full_name"]
+        if fetched.get("bio"): new_data["bio"] = fetched["bio"]
+        if "is_verified" in fetched: new_data["is_verified"] = bool(fetched["is_verified"])
+        
+        is_manual = p.get("pic_source") == "manual"
+        got_pic = bool(fetched.get("profile_pic_url"))
+        if got_pic and not is_manual:
+            new_data["profile_pic_url"] = fetched["profile_pic_url"]
+            new_data["pic_source"] = fetched.get("pic_source", "fetched")
+        
+        new_data["last_checked"] = datetime.now(timezone.utc).isoformat()
+        await db.profiles.update_one({"id": pid, "user_id": user["id"]}, {"$set": new_data})
+        return _profile_out({**p, **new_data})
+    except HTTPException: raise
+    except Exception as e:
+        logger.exception("Refresh error")
+        raise HTTPException(status_code=500, detail=f"Refresh error: {str(e)}")
+
+class HtmlImportIn(BaseModel):
+    html: str
+
+@api_router.post("/profiles/{pid}/import-html")
+async def import_profile_html(pid: str, payload: HtmlImportIn, user: dict = Depends(get_current_user)):
+    p = await db.profiles.find_one({"id": pid, "user_id": user["id"]})
+    if not p: raise HTTPException(status_code=404, detail="Profile not found")
     
-    is_manual = p.get("pic_source") == "manual"
-    got_pic = bool(fetched.get("profile_pic_url"))
-    if got_pic and not is_manual:
-        new_data["profile_pic_url"] = fetched["profile_pic_url"]
-        new_data["pic_source"] = fetched.get("pic_source", "fetched")
+    html = payload.html
+    # Robust extraction from raw HTML
+    pic_match = re.search(r'"profile_pic_url_hd":"([^"]+)"', html) or re.search(r'"profile_pic_url":"([^"]+)"', html)
+    name_match = re.search(r'"full_name":"([^"]+)"', html)
+    bio_match = re.search(r'"biography":"([^"]+)"', html)
     
-    new_data["last_checked"] = datetime.now(timezone.utc).isoformat()
+    pic = pic_match.group(1).replace("\\u0026", "&") if pic_match else None
+    if pic:
+        local_url = await download_profile_pic(pic, user["id"], p["id"])
+        if local_url: pic = local_url
+
+    new_data = {
+        "full_name": name_match.group(1) if name_match else p.get("full_name"),
+        "profile_pic_url": pic or p.get("profile_pic_url"),
+        "bio": bio_match.group(1) if bio_match else p.get("bio"),
+        "last_checked": datetime.now(timezone.utc).isoformat()
+    }
     await db.profiles.update_one({"id": pid, "user_id": user["id"]}, {"$set": new_data})
     return _profile_out({**p, **new_data})
 
