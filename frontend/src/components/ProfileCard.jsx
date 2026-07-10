@@ -95,6 +95,7 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
   const [importHtmlOpen, setImportHtmlOpen] = useState(false);
   const [pastedHtml, setPastedHtml] = useState("");
   const [importingHtml, setImportingHtml] = useState(false);
+  const [resetting, setResetting] = useState(false);
 
   const [favOpen, setFavOpen] = useState(false);
   const [favPictures, setFavPictures] = useState(profile.fav_pictures || []);
@@ -175,6 +176,22 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
       toast.error(err.response?.data?.detail || "Import failed");
     } finally {
       setImportingHtml(false);
+    }
+  };
+
+  const resetProfile = async () => {
+    if (!window.confirm("Are you sure? This will clear the fetched name, bio, and photo.")) return;
+    setResetting(true);
+    try {
+      const { data } = await api.post(`/profiles/${profile.id}/reset-fetched`);
+      onChange(data);
+      setEditName("");
+      setEditNotes("");
+      toast.success("Profile data reset");
+    } catch {
+      toast.error("Reset failed");
+    } finally {
+      setResetting(false);
     }
   };
 
@@ -842,11 +859,21 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
             </div>
           </div>
 
-          <DialogFooter className="border-t border-slate-700 pt-6">
-            <Button variant="ghost" onClick={() => setEditOpen(false)} className="rounded-xl text-slate-400 hover:text-white font-bold uppercase tracking-widest text-[11px]">Discard</Button>
-            <Button onClick={saveEdit} disabled={savingEdit} className="rounded-xl bg-[#0076B6] hover:bg-[#0089d3] font-display font-black uppercase tracking-[0.2em] px-10 shadow-xl h-12">
-              {savingEdit ? "Updating..." : "Commit Changes"}
+          <DialogFooter className="border-t border-slate-700 pt-6 flex flex-row justify-between sm:justify-between items-center">
+            <Button 
+              onClick={resetProfile} 
+              disabled={resetting} 
+              variant="ghost" 
+              className="rounded-xl text-red-400 hover:text-red-300 hover:bg-red-900/20 font-bold uppercase tracking-widest text-[10px] border border-red-900/30"
+            >
+              {resetting ? "Resetting..." : "Reset Data"}
             </Button>
+            <div className="flex gap-3">
+              <Button variant="ghost" onClick={() => setEditOpen(false)} className="rounded-xl text-slate-400 hover:text-white font-bold uppercase tracking-widest text-[11px]">Discard</Button>
+              <Button onClick={saveEdit} disabled={savingEdit} className="rounded-xl bg-[#0076B6] hover:bg-[#0089d3] font-display font-black uppercase tracking-[0.2em] px-10 shadow-xl h-12">
+                {savingEdit ? "Updating..." : "Commit Changes"}
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
