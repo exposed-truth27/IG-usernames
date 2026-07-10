@@ -431,40 +431,33 @@ async def _provider_scraping_bot(username, _key):
     except Exception: return {}
 
 async def _provider_downloader_style(username, _key):
-    """Mimics the logic of sites like Publer by using specific public endpoints and viewer patterns"""
-    # Pattern 1: GraphQL Public Endpoint (Very common for downloaders)
+    """Mimics downloader sites by using Scrape.do with full JS rendering to bypass IG blocks"""
+    token = "80df8c4c0d5c42a8a2ea0986c28ca338270ba5f8ddd"
+    target = f"https://www.instagram.com/{username}/"
+    url = f"https://api.scrape.do?token={token}&url={target}&render=true"
+    
     try:
-        url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={username}"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-            "x-ig-app-id": "936619743392459",
-            "x-requested-with": "XMLHttpRequest",
-            "Accept": "*/*",
-            "Referer": f"https://www.instagram.com/{username}/"
-        }
-        async with httpx.AsyncClient(timeout=15.0) as cx:
-            r = await cx.get(url, headers=headers)
+        async with httpx.AsyncClient(timeout=30.0) as cx:
+            r = await cx.get(url)
             if r.status_code == 200:
-                data = r.json()
-                user = data.get("data", {}).get("user", {})
-                if user:
-                    return _norm_result(username, user.get("full_name"), user.get("profile_pic_url_hd") or user.get("profile_pic_url"),
-                                        user.get("is_verified"), user.get("biography"))
-    except Exception: pass
-
-    # Pattern 2: Public Viewer Pattern (Stealth)
-    try:
-        url = f"https://www.instagram.com/{username}/?__a=1&__d=dis"
-        headers = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"}
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as cx:
-            r = await cx.get(url, headers=headers)
-            if r.status_code == 200:
-                data = r.json()
-                user = data.get("graphql", {}).get("user", {}) or data.get("items", [{}])[0].get("user", {})
-                if user:
-                    return _norm_result(username, user.get("full_name"), user.get("profile_pic_url_hd") or user.get("profile_pic_url"),
-                                        user.get("is_verified"), user.get("biography"))
-    except Exception: pass
+                # Extract data from the fully rendered HTML
+                pic_match = re.search(r'"profile_pic_url_hd":"([^"]+)"', r.text)
+                if not pic_match:
+                    pic_match = re.search(r'"profile_pic_url":"([^"]+)"', r.text)
+                
+                name_match = re.search(r'"full_name":"([^"]+)"', r.text)
+                bio_match = re.search(r'"biography":"([^"]+)"', r.text)
+                verified_match = re.search(r'"is_verified":([^,}]+)', r.text)
+                
+                if pic_match:
+                    pic = pic_match.group(1).replace("\\u0026", "&").replace("\\", "")
+                    name = name_match.group(1).replace("\\", "") if name_match else ""
+                    bio = bio_match.group(1).replace("\\n", "\n").replace("\\", "") if bio_match else ""
+                    is_verified = "true" in (verified_match.group(1).lower() if verified_match else "false")
+                    
+                    return _norm_result(username, name, pic, is_verified, bio)
+    except Exception as e:
+        logger.warning(f"Downloader-style scrape failed: {e}")
     return {}
 
 async def _provider_public_web(username, _key):
@@ -798,6 +791,21 @@ async def import_profile_html(pid: str, payload: HtmlImportIn, user: dict = Depe
         "profile_pic_url": pic or p.get("profile_pic_url"),
         "bio": bio or p.get("bio"),
         "last_checked": datetime.now(timezone.utc).isoformat()
+    }
+    await db.profiles.update_one({"id": pid, "user_id": user["id"]}, {"$set": new_data})
+    return _profile_out({**p, **new_data})
+
+@api_router.post("/profiles/{pid}/reset-fetched")
+async def reset_fetched_data(pid: str, user: dict = Depends(get_current_user)):
+    p = await db.profiles.find_one({"id": pid, "user_id": user["id"]})
+    if not p: raise HTTPException(status_code=404, detail="Profile not found")
+    
+    new_data = {
+        "full_name": "",
+        "profile_pic_url": None,
+        "bio": "",
+        "pic_source": "none",
+        "last_checked": None
     }
     await db.profiles.update_one({"id": pid, "user_id": user["id"]}, {"$set": new_data})
     return _profile_out({**p, **new_data})
