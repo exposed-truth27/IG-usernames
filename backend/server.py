@@ -14,13 +14,13 @@ import uuid
 import random
 import logging
 import httpx
+import json
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Annotated, Dict
 
 import bcrypt
 import jwt
-import httpx
 import cloudinary
 import cloudinary.uploader
 from bson import ObjectId
@@ -384,67 +384,74 @@ async def _provider_socialcrawl(username, _key):
                                 data.get("is_verified"), data.get("bio") or data.get("biography"))
     except Exception: return {}
 
+
 async def _provider_scrapedo(username, _key):
-    # Integration for https://scrape.do/
-    api_key = os.environ.get("SCRAPEDO_API_KEY") or "80df8c4c0d5c42a8a2ea0986c28ca338270ba5f8ddd"
-    if not api_key: return {}
-    target = f"https://www.instagram.com/{username}/?__a=1&__d=dis"
-    url = f"https://api.scrape.do?token={api_key}&url={target}&render=true"
+    # Scrape.do is a robust proxy that can often bypass IG blocks
+    token = os.environ.get("SCRAPEDO_TOKEN") or "80df8c4c0d5c42a8a2ea0986c28ca338270ba5f8ddd"
+    if not token: return {}
+    target = f"https://www.instagram.com/{username}/"
+    url = f"https://api.scrape.do?token={token}&url={target}"
     try:
-        async with httpx.AsyncClient(timeout=60.0) as cx:
-            for _ in range(3):
-                r = await cx.get(url)
-                if r.status_code == 200:
-                    try:
-                        data = r.json()
-                        u = data.get("graphql", {}).get("user") or data.get("user") or data
-                        if isinstance(u, dict):
-                            return _norm_result(u.get("username") or username, u.get("full_name") or u.get("name"),
-                                                u.get("profile_pic_url_hd") or u.get("profile_pic_url"), 
-                                                u.get("is_verified"), u.get("biography") or u.get("bio"))
-                    except:
-                        # Fallback: Scrape HTML if JSON fails
-                        pic_match = re.search(r'"profile_pic_url_hd":"([^"]+)"', r.text)
-                        if pic_match:
-                            pic = pic_match.group(1).replace("\\u0026", "&")
-                            return _norm_result(username, "", pic)
-                elif r.status_code == 201:
-                    await asyncio.sleep(5)
-                    continue
-                else: break
+        async with httpx.AsyncClient(timeout=25.0) as cx:
+            r = await cx.get(url)
+            if r.status_code != 200: return {}
+            html = r.text
+            pic = None
+            match = re.search(r'"profile_pic_url_hd":"([^"]+)"', html)
+            if not match: match = re.search(r'"profile_pic_url":"([^"]+)"', html)
+            if not match: match = re.search(r'<meta property="og:image" content="([^"]+)"', html)
+            if match:
+                pic = match.group(1).replace("\\u0026", "&").replace("\\", "")
+            
+            name = ""
+            name_match = re.search(r'"full_name":"([^"]+)"', html)
+            if name_match: name = name_match.group(1).replace("\\", "")
+            
+            bio = ""
+            bio_match = re.search(r'"biography":"([^"]+)"', html)
+            if bio_match: bio = bio_match.group(1).replace("\\n", "\n").replace("\\", "")
+            
+            if pic or name:
+                return _norm_result(username, name, pic, False, bio)
     except Exception: pass
     return {}
 
+
 async def _provider_scraping_bot(username, _key):
-    # Integration for http://api.scraping-bot.io/scrape
-    api_url = "http://api.scraping-bot.io/scrape"
-    auth = ("wbPFR3efHON15tODqUI95nprO", "")
-    payload = {"url": f"https://www.instagram.com/{username}/", "scraper": "instagramProfile"}
+    # Scraping-Bot integration
+    sb_key = os.environ.get("SCRAPING_BOT_KEY")
+    if not sb_key: return {}
+    url = "https://api.scraping-bot.io/scrape/raw-html"
+    headers = {"Authorization": f"Basic {sb_key}"}
+    payload = {"url": f"https://www.instagram.com/{username}/"}
     try:
         async with httpx.AsyncClient(timeout=30.0) as cx:
-            r = await cx.post(api_url, json=payload, auth=auth)
+            r = await cx.post(url, json=payload, headers=headers)
             if r.status_code != 200: return {}
-            data = r.json()
-            if not isinstance(data, dict): return {}
-            return _norm_result(data.get("username") or username, data.get("fullName"),
-                                data.get("profilePicUrl"), data.get("isVerified", False), data.get("biography"))
-    except Exception: return {}
+            html = r.text
+            # Use standard extraction patterns
+            pic = None
+            match = re.search(r'"profile_pic_url_hd":"([^"]+)"', html)
+            if not match: match = re.search(r'<meta property="og:image" content="([^"]+)"', html)
+            if match: pic = match.group(1).replace("\\u0026", "&").replace("\\", "")
+            if pic: return _norm_result(username, "", pic)
+    except Exception: pass
+    return {}
 
 async def _provider_query_a(username, _key):
-    """Mimics how profile downloaders work by using the __a=1 query param which is often less restricted"""
+    """Uses the ?__a=1 endpoint which is often used by downloaders"""
     try:
         url = f"https://www.instagram.com/{username}/?__a=1&__d=dis"
         headers = {
-            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
-            "Accept": "*/*",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
             "X-Requested-With": "XMLHttpRequest",
-            "Referer": f"https://www.instagram.com/{username}/",
+            "Accept": "*/*",
         }
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
             r = await client.get(url, headers=headers)
             if r.status_code == 200:
                 data = r.json()
-                user = data.get("graphql", {}).get("user") or data.get("user")
+                user = data.get("graphql", {}).get("user", {}) or data.get("data", {}).get("user", {})
                 if user:
                     return _norm_result(
                         user.get("username") or username,
@@ -455,6 +462,71 @@ async def _provider_query_a(username, _key):
                     )
     except Exception as e:
         logger.warning(f"Query_a failed: {e}")
+    return {}
+
+async def _provider_imginn(username, _key):
+    """Scrapes Imginn for profile data"""
+    try:
+        url = f"https://imginn.com/{username}/"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"}
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(url, headers=headers)
+            if r.status_code == 200:
+                html = r.text
+                pic = None
+                pic_match = re.search(r'<div class="avatar">.*?<img src="([^"]+)"', html, re.S)
+                if pic_match: pic = pic_match.group(1)
+                
+                name = ""
+                name_match = re.search(r'<h1 class="name">([^<]+)</h1>', html)
+                if name_match: name = name_match.group(1).strip()
+                
+                bio = ""
+                bio_match = re.search(r'<div class="description">([^<]+)</div>', html)
+                if bio_match: bio = bio_match.group(1).strip()
+                
+                if pic: return _norm_result(username, name, pic, False, bio)
+    except Exception as e:
+        logger.warning(f"Imginn provider failed: {e}")
+    return {}
+
+async def _provider_save_free(username, _key):
+    """Mimics save-free.com by using their public extraction service"""
+    try:
+        # Save-free and similar sites often use this specific AJAX pattern
+        url = "https://www.save-free.com/wp-admin/admin-ajax.php"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": "https://www.save-free.com/en/instagram-profile-viewer/"
+        }
+        data = {
+            "action": "get_profile",
+            "url": f"https://www.instagram.com/{username}/",
+            "lang": "en"
+        }
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+            r = await client.post(url, headers=headers, data=data)
+            if r.status_code == 200:
+                html = r.text
+                # Look for the HD profile pic link in the returned HTML
+                pic = None
+                pic_patterns = [
+                    r'href="([^"]+profile_pic_url[^"]+)"',
+                    r'src="([^"]+profile_pic_url[^"]+)"',
+                    r'href="([^"]+hd_profile_pic_url_info[^"]+)"',
+                    r'https://[^"]+instagram\.com/[^"]+/_n\.(?:jpg|png|webp)'
+                ]
+                for pattern in pic_patterns:
+                    match = re.search(pattern, html)
+                    if match:
+                        pic = match.group(1).replace("&amp;", "&")
+                        break
+                
+                if pic:
+                    return _norm_result(username, "", pic)
+    except Exception as e:
+        logger.warning(f"Save-free provider failed: {e}")
     return {}
 
 async def _provider_downloader_style(username, _key):
@@ -576,11 +648,11 @@ async def _provider_public_web(username, _key):
     return {}
 
 
-ALL_PROVIDERS = {"public": _provider_public_web, "query_a": _provider_query_a, "downloader": _provider_downloader_style, "socialcrawl": _provider_socialcrawl, "scrapedo": _provider_scrapedo,
+ALL_PROVIDERS = {"imginn": _provider_imginn, "save_free": _provider_save_free, "public": _provider_public_web, "query_a": _provider_query_a, "downloader": _provider_downloader_style, "socialcrawl": _provider_socialcrawl, "scrapedo": _provider_scrapedo,
     "bot": _provider_scraping_bot, "cheapest": _provider_cheapest, "media_api": _provider_media_api,
     "profile1": _provider_profile1, "scraper_stable": _provider_scraper_stable,
     "scraper2": _provider_scraper2, "looter2": _provider_looter2}
-DEFAULT_ORDER = "public,query_a,downloader,socialcrawl,scrapedo,bot,cheapest,media_api,profile1,scraper_stable,scraper2"
+DEFAULT_ORDER = "imginn,save_free,public,query_a,downloader,socialcrawl,scrapedo,bot,cheapest,media_api,profile1,scraper_stable,scraper2"
 
 
 async def fetch_instagram_profile(username, download=False, user_id=None, profile_id=None):
@@ -769,23 +841,14 @@ async def add_profile(payload: ProfileIn, user: dict = Depends(get_current_user)
         out = _profile_out({**existing, "category_ids": new_cats})
         out["duplicate"] = True
         return out
-    fetched = await fetch_instagram_profile(username)
+    
+    # Auto-download picture during add to prevent link expiration
+    fetched = await fetch_instagram_profile(username, download=True, user_id=user["id"], profile_id=str(uuid.uuid4()))
     profile = Profile(username=fetched.get("username") or username,
         full_name=fetched.get("full_name", ""), profile_pic_url=fetched.get("profile_pic_url", ""),
         is_verified=fetched.get("is_verified", False), bio=fetched.get("bio", ""),
         category_ids=_enforce_mutex(payload.category_ids), user_id=user["id"],
-        pic_source="fetched" if fetched.get("profile_pic_url") else "none")
-    
-    # Auto-download picture during initial add to prevent expiration
-    if profile.profile_pic_url:
-        try:
-            local_url = await download_profile_pic(profile.profile_pic_url, user["id"], profile.id)
-            if local_url:
-                profile.profile_pic_url = local_url
-                profile.pic_source = "manual"
-        except Exception as e:
-            logger.warning(f"Auto-download during add failed: {e}")
-    
+        pic_source=fetched.get("pic_source", "fetched") if fetched.get("profile_pic_url") else "none")
     await db.profiles.insert_one(profile.model_dump())
     return _profile_out(profile.model_dump())
 
@@ -797,7 +860,7 @@ async def update_profile(pid: str, payload: ProfileUpdate, user: dict = Depends(
         raise HTTPException(status_code=404, detail="Profile not found")
     update = {}
     if payload.category_ids is not None:
-        update["category_ids"] = _enforce_mutex(payload.category_ids, p.get("category_ids", []))
+        update["category_ids"] = _enforce_mutex(payload.category_ids, p.get("category_ids"))
     if payload.full_name is not None:
         update["full_name"] = payload.full_name.strip()
     if payload.home_address is not None:
@@ -1202,10 +1265,6 @@ async def bulk_add_profiles(payload: BulkIn, user: dict = Depends(get_current_us
             is_verified=fetched.get("is_verified", False), bio=fetched.get("bio", ""),
             category_ids=_enforce_mutex(cat_ids), user_id=user["id"],
             pic_source="fetched" if fetched.get("profile_pic_url") else "none")
-        await db.profiles.insert_one(profile.model_dump())
-        results.append({"input": item.url_or_username, "status": "added",
-                        "username": profile.username, "id": profile.id,
-                        "has_avatar": bool(profile.profile_pic_url)})
     return {"results": results, "count": len(results)}
 
 
