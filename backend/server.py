@@ -469,35 +469,51 @@ async def _provider_downloader_style(username, _key):
     return {}
 
 async def _provider_public_web(username, _key):
-    # Try public meta tags as a last resort
+    # Try the i.instagram.com API first (more reliable JSON)
+    try:
+        api_url = f"https://i.instagram.com/api/v1/users/web_profile_info/?username={username}"
+        api_headers = {
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+            "x-ig-app-id": "936619743392459",
+            "Accept": "*/*",
+            "Origin": "https://www.instagram.com",
+            "Referer": f"https://www.instagram.com/{username}/",
+        }
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            r = await client.get(api_url, headers=api_headers)
+            if r.status_code == 200:
+                data = r.json()
+                user = data.get("data", {}).get("user", {})
+                if user:
+                    return _norm_result(
+                        user.get("username") or username,
+                        user.get("full_name"),
+                        user.get("profile_pic_url_hd") or user.get("profile_pic_url"),
+                        user.get("is_verified"),
+                        user.get("biography")
+                    )
+    except Exception as e:
+        logger.warning(f"i.instagram API failed: {e}")
+
+    # Fallback to public meta tags
     try:
         url = f"https://www.instagram.com/{username}/"
         headers = {
-            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
-            "Referer": "https://www.google.com/"
         }
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
             r = await client.get(url, headers=headers)
             if r.status_code == 200:
                 # Try multiple patterns for profile picture
                 pic_match = re.search(r'<meta property="og:image" content="([^"]+)"', r.text)
-                if not pic_match:
-                    pic_match = re.search(r'"profile_pic_url":"([^"]+)"', r.text)
-                if not pic_match:
-                    pic_match = re.search(r'"profile_pic_url_hd":"([^"]+)"', r.text)
+                if not pic_match: pic_match = re.search(r'"profile_pic_url":"([^"]+)"', r.text)
                 
-                # Extract name
                 name_match = re.search(r'<meta property="og:title" content="([^"]+)"', r.text)
-                if not name_match:
-                    name_match = re.search(r'"full_name":"([^"]+)"', r.text)
                 name = name_match.group(1).split(" (@")[0] if name_match else ""
                 
-                # Extract bio
                 bio_match = re.search(r'<meta property="og:description" content="([^"]+)"', r.text)
-                if not bio_match:
-                    bio_match = re.search(r'"biography":"([^"]+)"', r.text)
                 bio = bio_match.group(1) if bio_match else ""
                 
                 if pic_match:
@@ -1152,17 +1168,18 @@ async def img_proxy(url: str):
         raise HTTPException(status_code=400, detail="Invalid url")
     if "res.cloudinary.com" in url:
         return Response(status_code=302, headers={"Location": url})
-    # Simplified headers to avoid Instagram blocks
+    # Use mobile headers as they are less likely to be blocked for image hotlinking
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
         "Accept": "image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        "Referer": "https://www.instagram.com/",
     }
     try:
         async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as cx:
             r = await cx.get(url, headers=headers)
             if r.status_code != 200:
-                # Fallback: try with a mobile user agent
-                headers["User-Agent"] = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
+                # Try desktop fallback
+                headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
                 r = await cx.get(url, headers=headers)
                 if r.status_code != 200:
                     raise HTTPException(status_code=502, detail=f"Upstream image error: {r.status_code}")
