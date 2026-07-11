@@ -430,6 +430,33 @@ async def _provider_scraping_bot(username, _key):
                                 data.get("profilePicUrl"), data.get("isVerified", False), data.get("biography"))
     except Exception: return {}
 
+async def _provider_query_a(username, _key):
+    """Mimics how profile downloaders work by using the __a=1 query param which is often less restricted"""
+    try:
+        url = f"https://www.instagram.com/{username}/?__a=1&__d=dis"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+            "Accept": "*/*",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": f"https://www.instagram.com/{username}/",
+        }
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            r = await client.get(url, headers=headers)
+            if r.status_code == 200:
+                data = r.json()
+                user = data.get("graphql", {}).get("user") or data.get("user")
+                if user:
+                    return _norm_result(
+                        user.get("username") or username,
+                        user.get("full_name"),
+                        user.get("profile_pic_url_hd") or user.get("profile_pic_url"),
+                        user.get("is_verified"),
+                        user.get("biography")
+                    )
+    except Exception as e:
+        logger.warning(f"Query_a failed: {e}")
+    return {}
+
 async def _provider_downloader_style(username, _key):
     """Mimics downloader sites by using Scrape.do with full JS rendering to bypass IG blocks"""
     token = "80df8c4c0d5c42a8a2ea0986c28ca338270ba5f8ddd"
@@ -443,9 +470,9 @@ async def _provider_downloader_style(username, _key):
                 # Simplified robust extraction
                 pic = None
                 # Pattern 1: Look for any HD profile pic URL
-                match = re.search(r'"profile_pic_url_hd":"([^"]+)"', r.text)
-                if not match: match = re.search(r'"profile_pic_url":"([^"]+)"', r.text)
-                if not match: match = re.search(r'"hd_profile_pic_url_info":\{"url":"([^"]+)"', r.text)
+                match = re.search(r'"profile_pic_url_hd"\s*:\s*"([^"]+)"', r.text)
+                if not match: match = re.search(r'"profile_pic_url"\s*:\s*"([^"]+)"', r.text)
+                if not match: match = re.search(r'"hd_profile_pic_url_info"\s*:\s*{\s*"url"\s*:\s*"([^"]+)"', r.text)
                 if not match: match = re.search(r'<meta property="og:image" content="([^"]+)"', r.text)
                 
                 if match:
@@ -455,8 +482,8 @@ async def _provider_downloader_style(username, _key):
                     elif "s320x320" in pic: pic = pic.replace("s320x320", "s1080x1080")
                     elif "s640x640" in pic: pic = pic.replace("s640x640", "s1080x1080")
                 
-                name_match = re.search(r'"full_name":"([^"]+)"', r.text)
-                bio_match = re.search(r'"biography":"([^"]+)"', r.text)
+                name_match = re.search(r'"full_name"\s*:\s*"([^"]+)"', r.text)
+                bio_match = re.search(r'"biography"\s*:\s*"([^"]+)"', r.text)
                 verified_match = re.search(r'"is_verified":([^,}]+)', r.text)
                 
                 if pic:
@@ -495,39 +522,65 @@ async def _provider_public_web(username, _key):
     except Exception as e:
         logger.warning(f"i.instagram API failed: {e}")
 
-    # Fallback to public meta tags
+    # Fallback to public meta tags and deep JSON inspection
     try:
         url = f"https://www.instagram.com/{username}/"
+        # Use a mobile user agent that is less likely to trigger the login redirect
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
         }
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
             r = await client.get(url, headers=headers)
             if r.status_code == 200:
-                # Try multiple patterns for profile picture
-                pic_match = re.search(r'<meta property="og:image" content="([^"]+)"', r.text)
-                if not pic_match: pic_match = re.search(r'"profile_pic_url":"([^"]+)"', r.text)
+                html = r.text
                 
-                name_match = re.search(r'<meta property="og:title" content="([^"]+)"', r.text)
-                name = name_match.group(1).split(" (@")[0] if name_match else ""
+                # Try specific keys suggested by user
+                pic = None
+                # Pattern 1: profile_pic_url_hd
+                match = re.search(r'"profile_pic_url_hd"\s*:\s*"([^"]+)"', html)
+                if not match: # Pattern 2: hd_profile_pic_url_info
+                    match = re.search(r'"hd_profile_pic_url_info"\s*:\s*{\s*"url"\s*:\s*"([^"]+)"', html)
+                if not match: # Pattern 3: standard profile_pic_url
+                    match = re.search(r'"profile_pic_url"\s*:\s*"([^"]+)"', html)
+                if not match: # Pattern 4: og:image meta
+                    match = re.search(r'<meta property="og:image" content="([^"]+)"', html)
                 
-                bio_match = re.search(r'<meta property="og:description" content="([^"]+)"', r.text)
-                bio = bio_match.group(1) if bio_match else ""
+                if match:
+                    pic = match.group(1).replace("\\u0026", "&").replace("\\", "")
                 
-                if pic_match:
-                    pic = pic_match.group(1).replace("\\u0026", "&").replace("\\", "")
+                # Extract name
+                name = ""
+                name_match = re.search(r'"full_name"\s*:\s*"([^"]+)"', html)
+                if not name_match:
+                    name_match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
+                if name_match:
+                    name = name_match.group(1).replace("\\", "").split(" (@")[0]
+                
+                # Extract bio
+                bio = ""
+                bio_match = re.search(r'"biography"\s*:\s*"([^"]+)"', html)
+                if not bio_match:
+                    bio_match = re.search(r'<meta property="og:description" content="([^"]+)"', html)
+                if bio_match:
+                    bio = bio_match.group(1).replace("\\n", "\n").replace("\\", "")
+                
+                if pic or name:
                     return _norm_result(username, name, pic, False, bio)
     except Exception: pass
     return {}
 
 
-ALL_PROVIDERS = {"public": _provider_public_web, "downloader": _provider_downloader_style, "socialcrawl": _provider_socialcrawl, "scrapedo": _provider_scrapedo,
+ALL_PROVIDERS = {"public": _provider_public_web, "query_a": _provider_query_a, "downloader": _provider_downloader_style, "socialcrawl": _provider_socialcrawl, "scrapedo": _provider_scrapedo,
     "bot": _provider_scraping_bot, "cheapest": _provider_cheapest, "media_api": _provider_media_api,
     "profile1": _provider_profile1, "scraper_stable": _provider_scraper_stable,
     "scraper2": _provider_scraper2, "looter2": _provider_looter2}
-DEFAULT_ORDER = "public,downloader,socialcrawl,scrapedo,bot,cheapest,media_api,profile1,scraper_stable,scraper2"
+DEFAULT_ORDER = "public,query_a,downloader,socialcrawl,scrapedo,bot,cheapest,media_api,profile1,scraper_stable,scraper2"
 
 
 async def fetch_instagram_profile(username, download=False, user_id=None, profile_id=None):
