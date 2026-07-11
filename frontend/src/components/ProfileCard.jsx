@@ -196,7 +196,7 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
     }
   };
 
-  const setUrl = async () => {
+  const setManualUrl = async () => {
     if (!picUrl) return;
     setUploading(true);
     try {
@@ -657,24 +657,45 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
       {/* Profile Pic Upload/URL Dialogs */}
       <input type="file" ref={fileRef} className="hidden" onChange={onFileChange} accept="image/*" />
       <Dialog open={picOpen} onOpenChange={setPicOpen}>
-        <DialogContent className="bg-slate-900 border-slate-800 rounded-3xl">
+        <DialogContent className="bg-slate-900 border-slate-800 rounded-3xl max-w-md shadow-2xl">
           <DialogHeader>
-            <DialogTitle className="text-white font-display font-black uppercase tracking-widest text-sm">Set Profile Pic URL</DialogTitle>
+            <DialogTitle className="text-xl font-display font-black text-white">Update Profile Image</DialogTitle>
           </DialogHeader>
-          <div className="py-4">
-            <Input
-              value={picUrl}
-              onChange={(e) => setPicUrl(e.target.value)}
-              placeholder="https://..."
-              className="bg-slate-950 border-slate-700 rounded-xl h-10 focus-visible:ring-[#0076B6] font-mono"
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setPicOpen(false)} className="rounded-xl text-slate-400 font-mono uppercase tracking-widest text-[10px]">Cancel</Button>
-            <Button onClick={setUrl} disabled={uploading || !picUrl} className="bg-[#0076B6] hover:bg-[#0089d3] rounded-xl font-display font-black uppercase tracking-widest text-xs">
-              {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Set URL"}
+          <div className="space-y-6 py-6">
+            <div className="space-y-3">
+              <label className="font-mono text-[10px] uppercase tracking-[0.3em] text-[#0076B6] font-black">Direct URL</label>
+              <div className="flex gap-3">
+                <Input value={picUrl} onChange={(e) => setPicUrl(e.target.value)} placeholder="https://..."
+                  className="bg-slate-950 border-slate-700 rounded-xl h-11 focus-visible:ring-[#0076B6]" />
+                <Button onClick={setManualUrl} disabled={uploading || !picUrl.trim()} size="sm" className="rounded-xl bg-[#0076B6] hover:bg-[#0089d3] px-6 font-bold">Set</Button>
+              </div>
+            </div>
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center"><span className="w-full border-t-2 border-slate-800" /></div>
+              <div className="relative flex justify-center text-[10px] uppercase tracking-[0.4em] font-black"><span className="bg-slate-900 px-4 text-slate-500">OR</span></div>
+            </div>
+            <div className="space-y-3">
+              <label className="font-mono text-[10px] uppercase tracking-[0.3em] text-[#0076B6] font-black">Local Upload</label>
+              <Button onClick={() => fileRef.current?.click()} disabled={uploading} variant="outline" className="w-full h-14 rounded-xl border-2 border-slate-700 border-dashed text-slate-300 hover:bg-slate-800 hover:border-[#0076B6] transition-all">
+                {uploading ? <Loader2 className="w-5 h-5 animate-spin mr-3" /> : <Upload className="w-5 h-5 mr-3 text-[#0076B6]" />}
+                <span className="font-bold uppercase tracking-widest text-xs">{uploading ? "Processing..." : "Select File from Device"}</span>
+              </Button>
+            </div>
+            {profile.profile_pic_url && (
+              <Button onClick={removePic} disabled={removingPic} variant="ghost" className="w-full text-red-400 hover:text-red-300 hover:bg-red-900/20 rounded-xl py-6 border border-red-900/30">
+                {removingPic ? <Loader2 className="w-5 h-5 animate-spin mr-3" /> : <Trash2 className="w-5 h-5 mr-3" />}
+                <span className="font-black uppercase tracking-widest text-xs">Purge Image</span>
+              </Button>
+            )}
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center"><span className="w-full border-t-2 border-slate-800" /></div>
+              <div className="relative flex justify-center text-[10px] uppercase tracking-[0.4em] font-black"><span className="bg-slate-900 px-4 text-slate-500">OR</span></div>
+            </div>
+            <Button onClick={() => { setPicOpen(false); setImportHtmlOpen(true); }} variant="outline" className="w-full h-14 rounded-xl border-2 border-slate-700 border-dashed text-slate-300 hover:bg-slate-800 hover:border-[#0076B6] transition-all">
+              <LinkIcon className="w-5 h-5 mr-3 text-[#0076B6]" />
+              <span className="font-bold uppercase tracking-widest text-xs">Import from Instagram HTML</span>
             </Button>
-          </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
 
