@@ -472,23 +472,46 @@ async def _provider_public_web(username, _key):
     # Try public meta tags as a last resort
     try:
         url = f"https://www.instagram.com/{username}/"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"}
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://www.google.com/"
+        }
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
             r = await client.get(url, headers=headers)
             if r.status_code == 200:
+                # Try multiple patterns for profile picture
                 pic_match = re.search(r'<meta property="og:image" content="([^"]+)"', r.text)
+                if not pic_match:
+                    pic_match = re.search(r'"profile_pic_url":"([^"]+)"', r.text)
+                if not pic_match:
+                    pic_match = re.search(r'"profile_pic_url_hd":"([^"]+)"', r.text)
+                
+                # Extract name
                 name_match = re.search(r'<meta property="og:title" content="([^"]+)"', r.text)
+                if not name_match:
+                    name_match = re.search(r'"full_name":"([^"]+)"', r.text)
                 name = name_match.group(1).split(" (@")[0] if name_match else ""
-                if pic_match: return _norm_result(username, name, pic_match.group(1))
+                
+                # Extract bio
+                bio_match = re.search(r'<meta property="og:description" content="([^"]+)"', r.text)
+                if not bio_match:
+                    bio_match = re.search(r'"biography":"([^"]+)"', r.text)
+                bio = bio_match.group(1) if bio_match else ""
+                
+                if pic_match:
+                    pic = pic_match.group(1).replace("\\u0026", "&").replace("\\", "")
+                    return _norm_result(username, name, pic, False, bio)
     except Exception: pass
     return {}
 
 
-ALL_PROVIDERS = {"downloader": _provider_downloader_style, "socialcrawl": _provider_socialcrawl, "scrapedo": _provider_scrapedo,
+ALL_PROVIDERS = {"public": _provider_public_web, "downloader": _provider_downloader_style, "socialcrawl": _provider_socialcrawl, "scrapedo": _provider_scrapedo,
     "bot": _provider_scraping_bot, "cheapest": _provider_cheapest, "media_api": _provider_media_api,
     "profile1": _provider_profile1, "scraper_stable": _provider_scraper_stable,
-    "scraper2": _provider_scraper2, "looter2": _provider_looter2, "public": _provider_public_web}
-DEFAULT_ORDER = "downloader,public,socialcrawl,scrapedo,bot,cheapest,media_api,profile1,scraper_stable,scraper2"
+    "scraper2": _provider_scraper2, "looter2": _provider_looter2}
+DEFAULT_ORDER = "public,downloader,socialcrawl,scrapedo,bot,cheapest,media_api,profile1,scraper_stable,scraper2"
 
 
 async def fetch_instagram_profile(username, download=False, user_id=None, profile_id=None):
@@ -683,6 +706,17 @@ async def add_profile(payload: ProfileIn, user: dict = Depends(get_current_user)
         is_verified=fetched.get("is_verified", False), bio=fetched.get("bio", ""),
         category_ids=_enforce_mutex(payload.category_ids), user_id=user["id"],
         pic_source="fetched" if fetched.get("profile_pic_url") else "none")
+    
+    # Auto-download picture during initial add to prevent expiration
+    if profile.profile_pic_url:
+        try:
+            local_url = await download_profile_pic(profile.profile_pic_url, user["id"], profile.id)
+            if local_url:
+                profile.profile_pic_url = local_url
+                profile.pic_source = "manual"
+        except Exception as e:
+            logger.warning(f"Auto-download during add failed: {e}")
+    
     await db.profiles.insert_one(profile.model_dump())
     return _profile_out(profile.model_dump())
 
