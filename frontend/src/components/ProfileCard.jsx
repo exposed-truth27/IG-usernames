@@ -358,7 +358,7 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
                   <ExternalLink className="w-3 h-3" />
                 </a>
                 <span className="text-[10px] font-mono text-slate-500 uppercase tracking-tighter">
-                  ID: {profile.id.slice(0, 8)}
+                  ID: {profile.id.slice(0, 8)} | v2.0
                 </span>
               </div>
             </div>
@@ -552,11 +552,8 @@ export default function ProfileCard({ profile, categories, onChange, onDelete })
                     )}
                   </div>
                   <div className="absolute inset-0 bg-black/60 rounded-full opacity-0 group-hover/edit-avatar:opacity-100 transition-opacity flex items-center justify-center gap-2">
-                    <button onClick={() => fileRef.current?.click()} className="p-2 text-white hover:text-[#0076B6]" title="Upload">
-                      <Upload className="w-5 h-5" />
-                    </button>
-                    <button onClick={() => setPicOpen(true)} className="p-2 text-white hover:text-[#0076B6]" title="URL">
-                      <LinkIcon className="w-5 h-5" />
+                    <button onClick={() => setPicOpen(true)} className="p-2 text-white hover:text-[#0076B6]" title="Change Image">
+                      <Camera className="w-5 h-5" />
                     </button>
                   </div>
                 </div>
