@@ -227,6 +227,46 @@ def _pick_pic(p):
         pic = (hd[0] or {}).get("url")
     return pic or ""
 
+async def _provider_brightdata(username, _key):
+    """Uses Bright Data Web Unlocker to fetch the profile page and extract HD data."""
+    BRIGHTDATA_KEYS = [
+        "a1809413-87a4-4ab0-b986-58c7a9ab2a09",
+        "8c112baf-da82-4bb5-b549-3f5b615dfbef",
+        "ad2b6032-5e6e-4577-9100-34c1fd45d0e0",
+        "8e1c4c8c-03d5-4371-9303-921333fb26f8"
+    ]
+    random.shuffle(BRIGHTDATA_KEYS)
+    target_url = f"https://www.instagram.com/{username}/"
+    
+    for bd_key in BRIGHTDATA_KEYS:
+        # Update this with your actual Bright Data customer/zone info if different
+        proxy_url = f"http://brd-customer-hl_5742687c-zone-web_unlocker1:{bd_key}@brd.superproxy.io:22225"
+        try:
+            proxies = {"http://": proxy_url, "https://": proxy_url}
+            async with httpx.AsyncClient(proxies=proxies, timeout=30.0, follow_redirects=True, verify=False) as client:
+                r = await client.get(target_url)
+                if r.status_code == 200:
+                    html = r.text
+                    pic = None
+                    # Search for HD keys specifically
+                    match = re.search(r'"profile_pic_url_hd"\s*:\s*"([^"]+)"', html)
+                    if not match: match = re.search(r'"hd_profile_pic_url_info"\s*:\s*{\s*"url"\s*:\s*"([^"]+)"', html)
+                    if not match: match = re.search(r'"profile_pic_url"\s*:\s*"([^"]+)"', html)
+                    if match: pic = match.group(1).replace("\\u0026", "&").replace("\\", "")
+                    
+                    name = ""
+                    name_match = re.search(r'"full_name"\s*:\s*"([^"]+)"', html)
+                    if name_match: name = name_match.group(1).replace("\\", "")
+                    
+                    bio = ""
+                    bio_match = re.search(r'"biography"\s*:\s*"([^"]+)"', html)
+                    if bio_match: bio = bio_match.group(1).replace("\\n", "\n").replace("\\", "")
+                    
+                    if pic or name:
+                        return {"username": username, "full_name": name, "profile_pic_url": pic, "is_verified": False, "bio": bio}
+        except Exception as e:
+            continue
+    return {}
 
 async def _provider_cheapest(username, key):
     host = "instagram-cheapest.p.rapidapi.com"
@@ -648,11 +688,11 @@ async def _provider_public_web(username, _key):
     return {}
 
 
-ALL_PROVIDERS = {"imginn": _provider_imginn, "save_free": _provider_save_free, "public": _provider_public_web, "query_a": _provider_query_a, "downloader": _provider_downloader_style, "socialcrawl": _provider_socialcrawl, "scrapedo": _provider_scrapedo,
+ALL_PROVIDERS = {"brightdata": _provider_brightdata,"imginn": _provider_imginn, "save_free": _provider_save_free, "public": _provider_public_web, "query_a": _provider_query_a, "downloader": _provider_downloader_style, "socialcrawl": _provider_socialcrawl, "scrapedo": _provider_scrapedo,
     "bot": _provider_scraping_bot, "cheapest": _provider_cheapest, "media_api": _provider_media_api,
     "profile1": _provider_profile1, "scraper_stable": _provider_scraper_stable,
     "scraper2": _provider_scraper2, "looter2": _provider_looter2}
-DEFAULT_ORDER = "imginn,save_free,public,query_a,downloader,socialcrawl,scrapedo,bot,cheapest,media_api,profile1,scraper_stable,scraper2"
+DEFAULT_ORDER = "brightdata,imginn,save_free,public,query_a,downloader,socialcrawl,scrapedo,bot,cheapest,media_api,profile1,scraper_stable,scraper2"
 
 
 async def fetch_instagram_profile(username, download=False, user_id=None, profile_id=None):
