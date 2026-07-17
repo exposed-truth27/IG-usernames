@@ -12,6 +12,7 @@ import os
 import re
 import uuid
 import random
+import asyncio
 import logging
 import httpx
 import json
@@ -425,6 +426,88 @@ async def _provider_socialcrawl(username, _key):
     except Exception: return {}
 
 
+async def _provider_rocketapi(username, _key):
+    """RocketAPI.io provider"""
+    api_key = "sNEUALJdEml0VRvaCA0QOg"
+    url = "https://rocketapi.io/api/instagram/user/get_info"
+    headers = {"Authorization": f"Token {api_key}", "Content-Type": "application/json"}
+    payload = {"username": username}
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as cx:
+            r = await cx.post(url, headers=headers, json=payload)
+            if r.status_code == 200:
+                data = r.json().get("response", {}).get("body", {}).get("data", {}).get("user", {})
+                if data:
+                    return _norm_result(username, data.get("full_name"),
+                                        data.get("hd_profile_pic_url_info", {}).get("url") or data.get("profile_pic_url"),
+                                        data.get("is_verified"), data.get("biography"))
+    except Exception as e:
+        logger.warning(f"RocketAPI failed: {e}")
+    return {}
+
+
+async def _provider_starapi(username, _key):
+    """StarAPI (RapidAPI) provider with key cycling"""
+    star_keys = ["ee6af745afmshd0328d2962d87e6p1b9b49jsna966d152f641"]
+    host = "instagram-scraper-2025.p.rapidapi.com"
+    for k in star_keys:
+        try:
+            headers = {"x-rapidapi-key": k, "x-rapidapi-host": host}
+            url = f"https://{host}/v1/info?username_or_id_or_url={username}"
+            async with httpx.AsyncClient(timeout=20.0) as cx:
+                r = await cx.get(url, headers=headers)
+                if r.status_code == 200:
+                    data = r.json().get("data", {})
+                    if data:
+                        return _norm_result(username, data.get("full_name"),
+                                            data.get("profile_pic_url_hd") or data.get("profile_pic_url"),
+                                            data.get("is_verified"), data.get("biography"))
+        except Exception as e:
+            logger.warning(f"StarAPI failed with key {k[:8]}: {e}")
+            continue
+    return {}
+
+
+async def _provider_brightdata_dataset(username, _key):
+    """Uses Bright Data Dataset API to fetch high-quality profile data."""
+    BRIGHTDATA_KEYS = [
+        "a1809413-87a4-4ab0-b986-58c7a9ab2a09",
+        "8c112baf-da82-4bb5-b549-3f5b615dfbef",
+        "ad2b6032-5e6e-4577-9100-34c1fd45d0e0",
+        "8e1c4c8c-03d5-4371-9303-921333fb26f8"
+    ]
+    random.shuffle(BRIGHTDATA_KEYS)
+    dataset_id = "gd_l1vikfch901nx3by4"
+    url = f"https://api.brightdata.com/datasets/v3/trigger?dataset_id={dataset_id}&include_errors=true"
+    
+    for bd_key in BRIGHTDATA_KEYS:
+        try:
+            headers = {"Authorization": f"Bearer {bd_key}", "Content-Type": "application/json"}
+            payload = {"input": [{"user_name": username}]}
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                r = await client.post(url, headers=headers, json=payload)
+                if r.status_code in [200, 202]:
+                    snapshot_id = r.json().get("snapshot_id")
+                    if not snapshot_id: continue
+                    for _ in range(5):
+                        await asyncio.sleep(3)
+                        res_url = f"https://api.brightdata.com/datasets/v3/snapshot/{snapshot_id}?format=json"
+                        res = await client.get(res_url, headers=headers)
+                        if res.status_code == 200:
+                            data = res.json()
+                            if isinstance(data, list) and len(data) > 0:
+                                profile = data[0]
+                                pic = profile.get("profile_pic_url_hd") or profile.get("profile_pic_url")
+                                return _norm_result(username, profile.get("full_name", ""), pic, 
+                                                    profile.get("is_verified", False), profile.get("biography", ""))
+                        elif res.status_code == 202: continue
+                        else: break
+        except Exception as e:
+            logger.warning(f"Bright Data Dataset API failed for key {bd_key[:8]}: {e}")
+            continue
+    return {}
+
+
 async def _provider_scrapedo(username, _key):
     # Scrape.do is a robust proxy that can often bypass IG blocks
     token = os.environ.get("SCRAPEDO_TOKEN") or "80df8c4c0d5c42a8a2ea0986c28ca338270ba5f8ddd"
@@ -688,11 +771,17 @@ async def _provider_public_web(username, _key):
     return {}
 
 
-ALL_PROVIDERS = {"brightdata": _provider_brightdata,"imginn": _provider_imginn, "save_free": _provider_save_free, "public": _provider_public_web, "query_a": _provider_query_a, "downloader": _provider_downloader_style, "socialcrawl": _provider_socialcrawl, "scrapedo": _provider_scrapedo,
+ALL_PROVIDERS = {
+    "rocketapi": _provider_rocketapi,
+    "starapi": _provider_starapi,
+    "brightdata_dataset": _provider_brightdata_dataset,
+    "brightdata": _provider_brightdata,
+    "imginn": _provider_imginn, "save_free": _provider_save_free, "public": _provider_public_web, "query_a": _provider_query_a, "downloader": _provider_downloader_style, "socialcrawl": _provider_socialcrawl, "scrapedo": _provider_scrapedo,
     "bot": _provider_scraping_bot, "cheapest": _provider_cheapest, "media_api": _provider_media_api,
     "profile1": _provider_profile1, "scraper_stable": _provider_scraper_stable,
-    "scraper2": _provider_scraper2, "looter2": _provider_looter2}
-DEFAULT_ORDER = "brightdata,imginn,save_free,public,query_a,downloader,socialcrawl,scrapedo,bot,cheapest,media_api,profile1,scraper_stable,scraper2"
+    "scraper2": _provider_scraper2, "looter2": _provider_looter2
+}
+DEFAULT_ORDER = "rocketapi,starapi,brightdata_dataset,brightdata,imginn,save_free,public,query_a,downloader,socialcrawl,scrapedo,bot,cheapest,media_api,profile1,scraper_stable,scraper2"
 
 
 async def fetch_instagram_profile(username, download=False, user_id=None, profile_id=None):
@@ -1320,6 +1409,13 @@ async def img_proxy(url: str):
         raise HTTPException(status_code=400, detail="Invalid url")
     if "res.cloudinary.com" in url:
         return Response(status_code=302, headers={"Location": url})
+    
+    # Try to upgrade image to full size if it's a thumbnail
+    full_url = url
+    if "s150x150" in full_url: full_url = full_url.replace("s150x150", "s1080x1080")
+    elif "s320x320" in full_url: full_url = full_url.replace("s320x320", "s1080x1080")
+    elif "s640x640" in full_url: full_url = full_url.replace("s640x640", "s1080x1080")
+    
     # Use mobile headers as they are less likely to be blocked for image hotlinking
     headers = {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
@@ -1328,9 +1424,9 @@ async def img_proxy(url: str):
     }
     try:
         async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as cx:
-            r = await cx.get(url, headers=headers)
+            r = await cx.get(full_url, headers=headers)
             if r.status_code != 200:
-                # Try desktop fallback
+                # Try desktop fallback or original URL if full size failed
                 headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
                 r = await cx.get(url, headers=headers)
                 if r.status_code != 200:
