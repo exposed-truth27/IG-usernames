@@ -212,21 +212,39 @@ def extract_username(raw: str) -> Optional[str]:
     return None
 
 
+def _force_hd_url(url: str) -> str:
+    if not url: return ""
+    # Instagram CDN resolution tags
+    res_tags = ["s150x150", "s320x320", "s480x480", "s640x640", "s720x720", "s1080x1080"]
+    new_url = url
+    for tag in res_tags:
+        if tag in new_url:
+            new_url = new_url.replace(tag, "s1080x1080")
+    return new_url
+
 def _norm_result(username, full_name="", pic="", is_verified=False, bio=""):
-    return {"username": username, "full_name": full_name or "", "profile_pic_url": pic or "",
+    return {"username": username, "full_name": full_name or "", "profile_pic_url": _force_hd_url(pic),
             "is_verified": bool(is_verified), "bio": bio or ""}
 
 
 def _pick_pic(p):
     if not isinstance(p, dict):
         return ""
-    pic = p.get("profile_pic_url_hd") or p.get("profile_pic_url")
-    hd = p.get("hd_profile_pic_url_info") or p.get("hd_profile_pic_versions")
-    if not pic and isinstance(hd, dict):
-        pic = hd.get("url")
-    if not pic and isinstance(hd, list) and hd:
-        pic = (hd[0] or {}).get("url")
-    return pic or ""
+    # Try multiple keys for HD pictures
+    pic = p.get("profile_pic_url_hd") or p.get("hd_profile_pic_url_info", {}).get("url")
+    if not pic:
+        hd_info = p.get("hd_profile_pic_url_info")
+        if isinstance(hd_info, dict): pic = hd_info.get("url")
+    if not pic:
+        hd_versions = p.get("hd_profile_pic_versions")
+        if isinstance(hd_versions, list) and hd_versions:
+            # Pick the largest one
+            sorted_versions = sorted(hd_versions, key=lambda x: x.get("width", 0), reverse=True)
+            pic = sorted_versions[0].get("url")
+    if not pic:
+        pic = p.get("profile_pic_url")
+    
+    return _force_hd_url(pic) if pic else ""
 
 async def _provider_brightdata(username, _key):
     """Uses Bright Data Web Unlocker to fetch the profile page and extract HD data."""
@@ -438,8 +456,10 @@ async def _provider_rocketapi(username, _key):
             if r.status_code == 200:
                 data = r.json().get("response", {}).get("body", {}).get("data", {}).get("user", {})
                 if data:
-                    return _norm_result(username, data.get("full_name"),
-                                        data.get("hd_profile_pic_url_info", {}).get("url") or data.get("profile_pic_url"),
+                    pic = data.get("hd_profile_pic_url_info", {}).get("url") or data.get("profile_pic_url")
+                    if pic:
+                        pic = pic.replace("s150x150", "s1080x1080").replace("s320x320", "s1080x1080").replace("s640x640", "s1080x1080")
+                    return _norm_result(username, data.get("full_name"), pic,
                                         data.get("is_verified"), data.get("biography"))
     except Exception as e:
         logger.warning(f"RocketAPI failed: {e}")
@@ -459,8 +479,10 @@ async def _provider_starapi(username, _key):
                 if r.status_code == 200:
                     data = r.json().get("data", {})
                     if data:
-                        return _norm_result(username, data.get("full_name"),
-                                            data.get("profile_pic_url_hd") or data.get("profile_pic_url"),
+                        pic = data.get("profile_pic_url_hd") or data.get("profile_pic_url")
+                        if pic:
+                            pic = pic.replace("s150x150", "s1080x1080").replace("s320x320", "s1080x1080").replace("s640x640", "s1080x1080")
+                        return _norm_result(username, data.get("full_name"), pic,
                                             data.get("is_verified"), data.get("biography"))
         except Exception as e:
             logger.warning(f"StarAPI failed with key {k[:8]}: {e}")
@@ -498,6 +520,8 @@ async def _provider_brightdata_dataset(username, _key):
                             if isinstance(data, list) and len(data) > 0:
                                 profile = data[0]
                                 pic = profile.get("profile_pic_url_hd") or profile.get("profile_pic_url")
+                                if pic:
+                                    pic = pic.replace("s150x150", "s1080x1080").replace("s320x320", "s1080x1080").replace("s640x640", "s1080x1080")
                                 return _norm_result(username, profile.get("full_name", ""), pic, 
                                                     profile.get("is_verified", False), profile.get("biography", ""))
                         elif res.status_code == 202: continue
