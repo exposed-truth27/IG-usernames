@@ -105,6 +105,19 @@ class Category(BaseModel):
     user_id: str
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
+class ResolveInstagramIn(BaseModel):
+    url_or_username: str
+
+class ResolvedMedia(BaseModel):
+    type: str
+    media_url: str
+    filename: str
+    source_url: str
+    thumbnail_url: Optional[str] = None
+
+class DownloadMediaIn(BaseModel):
+    url_or_username: str
+
 class ProfileIn(BaseModel):
     url_or_username: str
     category_ids: List[str] = []
@@ -199,6 +212,89 @@ async def get_current_user(request: Request) -> dict:
 
 USERNAME_RE = re.compile(r"^[A-Za-z0-9._]+$")
 
+def extract_instagram_media_id(raw: str) -> Optional[str]:
+    if not raw:
+        return None
+    s = raw.strip().split("?")[0].split("#")[0]
+    m = re.search(r"instagram.com/(?:p|reel|reels|tv|stories)/([A-Za-z0-9._-]+)", s, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    s = s.lstrip("@").rstrip("/")
+    if USERNAME_RE.match(s):
+        return s
+    return None
+
+async def stream_remote_file(url: str, filename: str):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Referer": "https://www.instagram.com/",
+    }
+    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True, verify=False) as client:
+        r = await client.get(url, headers=headers)
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail="File download failed")
+    media_type = r.headers.get("content-type", "application/octet-stream")
+    return Response(
+        content=r.content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+async def resolve_instagram_media(source: str) -> dict:
+    target = source.strip()
+    if not target.startswith("http"):
+        target = f"https://www.instagram.com/{target.lstrip("@")}/"
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Referer": "https://www.instagram.com/",
+    }
+
+    async with httpx.AsyncClient(timeout=25.0, follow_redirects=True, verify=False) as client:
+        r = await client.get(target, headers=headers)
+
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail="Instagram resolution failed")
+
+    html = r.text
+    media_url = None
+    thumb = None
+
+    for pat in [
+        r"\"video_url\"s*:\s*\"([^\"]+)\"",
+        r"\"display_url\"s*:\s*\"([^\"]+)\"",
+        r"property=\"og:video\" content=\"([^\"]+)\"",
+        r"property=\"og:image\" content=\"([^\"]+)\"",
+    ]:
+        m = re.search(pat, html)
+        if m:
+            media_url = m.group(1).replace("\\u0026", "&").replace("\\/", "/")
+            break
+
+    m = re.search(r"property=\"og:image\" content=\"([^\"]+)\"", html)
+    if m:
+        thumb = m.group(1).replace("\\u0026", "&").replace("\\/", "/")
+
+    if not media_url:
+        raise HTTPException(status_code=404, detail="No media found")
+
+    kind = "video" if ".mp4" in media_url or "video" in media_url.lower() else "image"
+    ext = "mp4" if kind == "video" else "jpg"
+    fn = f"instagram_{uuid.uuid4().hex}.{ext}"
+
+    return {
+        "type": kind,
+        "media_url": media_url,
+        "filename": fn,
+        "source_url": source,
+        "thumbnail_url": thumb,
+    }
+
+
 def extract_username(raw: str) -> Optional[str]:
     if not raw:
         return None
@@ -248,12 +344,8 @@ def _pick_pic(p):
 
 async def _provider_brightdata(username, _key):
     """Uses Bright Data Web Unlocker to fetch the profile page and extract HD data."""
-    BRIGHTDATA_KEYS = [
-        "a1809413-87a4-4ab0-b986-58c7a9ab2a09",
-        "8c112baf-da82-4bb5-b549-3f5b615dfbef",
-        "ad2b6032-5e6e-4577-9100-34c1fd45d0e0",
-        "8e1c4c8c-03d5-4371-9303-921333fb26f8"
-    ]
+    BRIGHTDATA_KEYS = os.environ.get("BRIGHTDATA_API_KEYS", "").split(",")
+    if not BRIGHTDATA_KEYS: return {}
     random.shuffle(BRIGHTDATA_KEYS)
     target_url = f"https://www.instagram.com/{username}/"
     
@@ -492,12 +584,8 @@ async def _provider_starapi(username, _key):
 
 async def _provider_brightdata_dataset(username, _key):
     """Uses Bright Data Dataset API to fetch high-quality profile data."""
-    BRIGHTDATA_KEYS = [
-        "a1809413-87a4-4ab0-b986-58c7a9ab2a09",
-        "8c112baf-da82-4bb5-b549-3f5b615dfbef",
-        "ad2b6032-5e6e-4577-9100-34c1fd45d0e0",
-        "8e1c4c8c-03d5-4371-9303-921333fb26f8"
-    ]
+    BRIGHTDATA_KEYS = os.environ.get("BRIGHTDATA_API_KEYS", "").split(",")
+    if not BRIGHTDATA_KEYS: return {}
     random.shuffle(BRIGHTDATA_KEYS)
     dataset_id = "gd_l1vikfch901nx3by4"
     url = f"https://api.brightdata.com/datasets/v3/trigger?dataset_id={dataset_id}&include_errors=true"
@@ -534,7 +622,7 @@ async def _provider_brightdata_dataset(username, _key):
 
 async def _provider_scrapedo(username, _key):
     # Scrape.do is a robust proxy that can often bypass IG blocks
-    token = os.environ.get("SCRAPEDO_TOKEN") or "80df8c4c0d5c42a8a2ea0986c28ca338270ba5f8ddd"
+    token = os.environ.get("SCRAPEDO_TOKEN")
     if not token: return {}
     target = f"https://www.instagram.com/{username}/"
     url = f"https://api.scrape.do?token={token}&url={target}"
@@ -637,48 +725,10 @@ async def _provider_imginn(username, _key):
         logger.warning(f"Imginn provider failed: {e}")
     return {}
 
-async def _provider_save_free(username, _key):
-    """Mimics save-free.com by using their public extraction service"""
-    try:
-        # Save-free and similar sites often use this specific AJAX pattern
-        url = "https://www.save-free.com/wp-admin/admin-ajax.php"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-            "X-Requested-With": "XMLHttpRequest",
-            "Referer": "https://www.save-free.com/en/instagram-profile-viewer/"
-        }
-        data = {
-            "action": "get_profile",
-            "url": f"https://www.instagram.com/{username}/",
-            "lang": "en"
-        }
-        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-            r = await client.post(url, headers=headers, data=data)
-            if r.status_code == 200:
-                html = r.text
-                # Look for the HD profile pic link in the returned HTML
-                pic = None
-                pic_patterns = [
-                    r'href="([^"]+profile_pic_url[^"]+)"',
-                    r'src="([^"]+profile_pic_url[^"]+)"',
-                    r'href="([^"]+hd_profile_pic_url_info[^"]+)"',
-                    r'https://[^"]+instagram\.com/[^"]+/_n\.(?:jpg|png|webp)'
-                ]
-                for pattern in pic_patterns:
-                    match = re.search(pattern, html)
-                    if match:
-                        pic = match.group(1).replace("&amp;", "&")
-                        break
-                
-                if pic:
-                    return _norm_result(username, "", pic)
-    except Exception as e:
-        logger.warning(f"Save-free provider failed: {e}")
-    return {}
 
 async def _provider_downloader_style(username, _key):
     """Mimics downloader sites by using Scrape.do with full JS rendering to bypass IG blocks"""
-    token = "80df8c4c0d5c42a8a2ea0986c28ca338270ba5f8ddd"
+    token = os.environ.get("SCRAPEDO_TOKEN")
     target = f"https://www.instagram.com/{username}/"
     url = f"https://api.scrape.do?token={token}&url={target}&render=true"
     
@@ -800,7 +850,7 @@ ALL_PROVIDERS = {
     "starapi": _provider_starapi,
     "brightdata_dataset": _provider_brightdata_dataset,
     "brightdata": _provider_brightdata,
-    "imginn": _provider_imginn, "save_free": _provider_save_free, "public": _provider_public_web, "query_a": _provider_query_a, "downloader": _provider_downloader_style, "socialcrawl": _provider_socialcrawl, "scrapedo": _provider_scrapedo,
+    "imginn": _provider_imginn, "public": _provider_public_web, "query_a": _provider_query_a, "downloader": _provider_downloader_style, "socialcrawl": _provider_socialcrawl, "scrapedo": _provider_scrapedo,
     "bot": _provider_scraping_bot, "cheapest": _provider_cheapest, "media_api": _provider_media_api,
     "profile1": _provider_profile1, "scraper_stable": _provider_scraper_stable,
     "scraper2": _provider_scraper2, "looter2": _provider_looter2
@@ -979,6 +1029,15 @@ async def list_profiles(user: dict = Depends(get_current_user)):
         results.append(_profile_out(p, mutual_follower_pics=mutual))
     return results
 
+
+@api_router.post("/resolve-instagram", response_model=ResolvedMedia)
+async def resolve_instagram(payload: ResolveInstagramIn, user: dict = Depends(get_current_user)):
+    return await resolve_instagram_media(payload.url_or_username)
+
+@api_router.post("/download-instagram")
+async def download_instagram(payload: DownloadMediaIn, user: dict = Depends(get_current_user)):
+    resolved = await resolve_instagram_media(payload.url_or_username)
+    return await stream_remote_file(resolved["media_url"], resolved["filename"])
 
 @api_router.post("/profiles")
 async def add_profile(payload: ProfileIn, user: dict = Depends(get_current_user)):
