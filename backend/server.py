@@ -246,7 +246,7 @@ async def stream_remote_file(url: str, filename: str):
 async def resolve_instagram_media(source: str) -> dict:
     target = source.strip()
     if not target.startswith("http"):
-        target = f"https://www.instagram.com/{target.lstrip('@')}/"
+        target = f"https://www.instagram.com/{target.lstrip("@")}/"
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
@@ -265,19 +265,19 @@ async def resolve_instagram_media(source: str) -> dict:
     thumb = None
 
     for pat in [
-        r"\"video_url\"\s*:\s*\"([^\"]+)\"",
-        r"\"display_url\"\s*:\s*\"([^\"]+)\"",
+        r"\"video_url\"s*:\s*\"([^\"]+)\"",
+        r"\"display_url\"s*:\s*\"([^\"]+)\"",
         r"property=\"og:video\" content=\"([^\"]+)\"",
         r"property=\"og:image\" content=\"([^\"]+)\"",
     ]:
         m = re.search(pat, html)
         if m:
-            media_url = _clean_url(m.group(1))
+            media_url = m.group(1).replace("\\u0026", "&").replace("\\/", "/")
             break
 
     m = re.search(r"property=\"og:image\" content=\"([^\"]+)\"", html)
     if m:
-        thumb = _clean_url(m.group(1))
+        thumb = m.group(1).replace("\\u0026", "&").replace("\\/", "/")
 
     if not media_url:
         raise HTTPException(status_code=404, detail="No media found")
@@ -308,47 +308,39 @@ def extract_username(raw: str) -> Optional[str]:
     return None
 
 
-def _clean_url(u: str) -> str:
-    if not u:
-        return ""
-    return u.replace("\\u0026", "&").replace("\\/", "/").replace("&amp;", "&")
-
-
-def _upgrade_ig_cdn(url: str) -> str:
-    if not url:
-        return ""
-    for tag in ["s150x150", "s320x320", "s480x480", "s640x640", "s720x720", "s1080x1080"]:
-        url = url.replace(tag, "s1080x1080")
-    return _clean_url(url)
-
-
-def _pick_pic(p: dict) -> str:
-    if not isinstance(p, dict):
-        return ""
-    candidates = [
-        p.get("profile_pic_url_hd"),
-        (p.get("hd_profile_pic_url_info") or {}).get("url") if isinstance(p.get("hd_profile_pic_url_info"), dict) else None,
-        p.get("profile_pic_url"),
-    ]
-    hd_versions = p.get("hd_profile_pic_versions")
-    if isinstance(hd_versions, list) and hd_versions:
-        hd_versions = sorted(hd_versions, key=lambda x: x.get("width", 0), reverse=True)
-        candidates.insert(0, hd_versions[0].get("url"))
-
-    for c in candidates:
-        if c:
-            return _upgrade_ig_cdn(c)
-    return ""
-
+def _force_hd_url(url: str) -> str:
+    if not url: return ""
+    # Instagram CDN resolution tags
+    res_tags = ["s150x150", "s320x320", "s480x480", "s640x640", "s720x720", "s1080x1080"]
+    new_url = url
+    for tag in res_tags:
+        if tag in new_url:
+            new_url = new_url.replace(tag, "s1080x1080")
+    return new_url
 
 def _norm_result(username, full_name="", pic="", is_verified=False, bio=""):
-    return {
-        "username": username,
-        "full_name": full_name or "",
-        "profile_pic_url": _upgrade_ig_cdn(pic),
-        "is_verified": bool(is_verified),
-        "bio": bio or "",
-    }
+    return {"username": username, "full_name": full_name or "", "profile_pic_url": _force_hd_url(pic),
+            "is_verified": bool(is_verified), "bio": bio or ""}
+
+
+def _pick_pic(p):
+    if not isinstance(p, dict):
+        return ""
+    # Try multiple keys for HD pictures
+    pic = p.get("profile_pic_url_hd") or p.get("hd_profile_pic_url_info", {}).get("url")
+    if not pic:
+        hd_info = p.get("hd_profile_pic_url_info")
+        if isinstance(hd_info, dict): pic = hd_info.get("url")
+    if not pic:
+        hd_versions = p.get("hd_profile_pic_versions")
+        if isinstance(hd_versions, list) and hd_versions:
+            # Pick the largest one
+            sorted_versions = sorted(hd_versions, key=lambda x: x.get("width", 0), reverse=True)
+            pic = sorted_versions[0].get("url")
+    if not pic:
+        pic = p.get("profile_pic_url")
+    
+    return _force_hd_url(pic) if pic else ""
 
 async def _provider_brightdata(username, _key):
     """Uses Bright Data Web Unlocker to fetch the profile page and extract HD data."""
@@ -863,73 +855,57 @@ ALL_PROVIDERS = {
     "profile1": _provider_profile1, "scraper_stable": _provider_scraper_stable,
     "scraper2": _provider_scraper2, "looter2": _provider_looter2
 }
-DEFAULT_ORDER = "rocketapi,starapi,brightdata_dataset,brightdata,socialcrawl,scrapedo,cheapest,media_api,profile1,scraper_stable,scraper2,looter2"
+DEFAULT_ORDER = "rocketapi,starapi,brightdata_dataset,brightdata,imginn,save_free,public,query_a,downloader,socialcrawl,scrapedo,bot,cheapest,media_api,profile1,scraper_stable,scraper2"
 
 
 async def fetch_instagram_profile(username, download=False, user_id=None, profile_id=None):
-    key = os.environ.get("RAPIDAPI_KEY")
-    order = [x.strip() for x in os.environ.get("SCRAPER_ORDER", ",".join(DEFAULT_ORDER)).split(",") if x.strip()]
-    best = None
+    key = os.environ.get("RAPIDAPI_KEY", "")
+    order = [x.strip() for x in os.environ.get("SCRAPER_ORDER", DEFAULT_ORDER).split(",") if x.strip()]
     last_err = None
-
+    best_result = {}
+    
     for name in order:
         fn = ALL_PROVIDERS.get(name)
-        if not fn:
-            continue
+        if not fn: continue
         try:
             result = await fn(username, key)
-            if not result:
+            if result and (result.get("profile_pic_url") or result.get("full_name") or result.get("bio")):
+                # If we found a picture, download it locally if requested
+                pic_url = result.get("profile_pic_url")
+                if pic_url and download and user_id and profile_id:
+                    try:
+                        local_url = await download_profile_pic(pic_url, user_id, profile_id)
+                        if local_url:
+                            result["profile_pic_url"] = local_url
+                            result["pic_source"] = "manual" # Treat as local
+                    except Exception as e:
+                        logger.warning(f"Auto-download failed: {e}")
+                
+                if result.get("profile_pic_url"):
+                    return result
+                if not best_result:
+                    best_result = result
                 continue
-
-            pic = result.get("profile_pic_url") or ""
-            pic = _upgrade_ig_cdn(pic)
-
-            if pic and download and user_id and profile_id:
-                local_url = await download_profile_pic(pic, user_id, profile_id)
-                if local_url:
-                    result["profile_pic_url"] = local_url
-                    result["pic_source"] = "local"
-                else:
-                    result["pic_source"] = "fetched"
-            else:
-                result["pic_source"] = "fetched"
-
-            result["profile_pic_url"] = pic if not download or not user_id or not profile_id else result["profile_pic_url"]
-            return result
         except Exception as e:
+            logger.warning(f"[{name}] failed: {e}")
             last_err = e
-            logger.warning(f"{name} failed: {e}")
-            if not best:
-                best = {}
-    return best or {}
-
+            
+    return best_result or {}
 
 async def download_profile_pic(url, user_id, profile_id):
+    """Download an external image and save it locally to prevent expiration"""
     user_dir = UPLOADS_DIR / str(user_id)
-    user_dir.mkdir(parents=True, exist_ok=True)
-
-    url = _upgrade_ig_cdn(url)
-    ext = ".jpg"
-    if ".png" in url.lower():
-        ext = ".png"
-    elif ".webp" in url.lower():
-        ext = ".webp"
-    elif ".gif" in url.lower():
-        ext = ".gif"
-
-    file_path = user_dir / f"{profile_id}_auto{ext}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-        "Referer": "https://www.instagram.com/",
-    }
-
+    user_dir.mkdir(exist_ok=True)
+    file_path = user_dir / f"{profile_id}_auto.jpg"
+    
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"}
     try:
-        async with httpx.AsyncClient(timeout=25.0, follow_redirects=True, verify=False) as cx:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as cx:
             r = await cx.get(url, headers=headers)
-            if r.status_code == 200 and r.content:
+            if r.status_code == 200:
                 with open(file_path, "wb") as f:
                     f.write(r.content)
-                return f"/uploads/{user_id}/{file_path.name}"
+                return f"/uploads/{user_id}/{profile_id}_auto.jpg"
     except Exception as e:
         logger.warning(f"Download failed: {e}")
     return None
@@ -1000,7 +976,7 @@ def _profile_out(p, mutual_follower_pics=None):
         "id": p["id"],
         "username": p["username"],
         "full_name": p.get("full_name", ""),
-        "profile_pic_url": _upgrade_ig_cdn(p.get("profile_pic_url") or ""),
+        "profile_pic_url": p.get("profile_pic_url", ""),
         "is_verified": p.get("is_verified", False),
         "bio": p.get("bio", ""),
         "category_ids": p.get("category_ids", []),
