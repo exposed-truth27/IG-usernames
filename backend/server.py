@@ -118,6 +118,14 @@ class ResolvedMedia(BaseModel):
 class DownloadMediaIn(BaseModel):
     url_or_username: str
 
+class IgSessionIn(BaseModel):
+    sessionid: str
+    csrftoken: str
+    ds_user_id: str
+    ig_did: Optional[str] = None
+    mid: Optional[str] = None
+    ig_claim: Optional[str] = "0"
+
 class ProfileIn(BaseModel):
     url_or_username: str
     category_ids: List[str] = []
@@ -246,7 +254,7 @@ async def stream_remote_file(url: str, filename: str):
 async def resolve_instagram_media(source: str) -> dict:
     target = source.strip()
     if not target.startswith("http"):
-        target = f"https://www.instagram.com/{target.lstrip("@")}/"
+        target = f"https://www.instagram.com/{target.lstrip('@')}/"
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
@@ -265,19 +273,19 @@ async def resolve_instagram_media(source: str) -> dict:
     thumb = None
 
     for pat in [
-        r"\"video_url\"s*:\s*\"([^\"]+)\"",
-        r"\"display_url\"s*:\s*\"([^\"]+)\"",
+        r"\"video_url\"\s*:\s*\"([^\"]+)\"",
+        r"\"display_url\"\s*:\s*\"([^\"]+)\"",
         r"property=\"og:video\" content=\"([^\"]+)\"",
         r"property=\"og:image\" content=\"([^\"]+)\"",
     ]:
         m = re.search(pat, html)
         if m:
-            media_url = m.group(1).replace("\\u0026", "&").replace("\\/", "/")
+            media_url = _clean_url(m.group(1))
             break
 
     m = re.search(r"property=\"og:image\" content=\"([^\"]+)\"", html)
     if m:
-        thumb = m.group(1).replace("\\u0026", "&").replace("\\/", "/")
+        thumb = _clean_url(m.group(1))
 
     if not media_url:
         raise HTTPException(status_code=404, detail="No media found")
@@ -308,39 +316,47 @@ def extract_username(raw: str) -> Optional[str]:
     return None
 
 
-def _force_hd_url(url: str) -> str:
-    if not url: return ""
-    # Instagram CDN resolution tags
-    res_tags = ["s150x150", "s320x320", "s480x480", "s640x640", "s720x720", "s1080x1080"]
-    new_url = url
-    for tag in res_tags:
-        if tag in new_url:
-            new_url = new_url.replace(tag, "s1080x1080")
-    return new_url
-
-def _norm_result(username, full_name="", pic="", is_verified=False, bio=""):
-    return {"username": username, "full_name": full_name or "", "profile_pic_url": _force_hd_url(pic),
-            "is_verified": bool(is_verified), "bio": bio or ""}
+def _clean_url(u: str) -> str:
+    if not u:
+        return ""
+    return u.replace("\\u0026", "&").replace("\\/", "/").replace("&amp;", "&")
 
 
-def _pick_pic(p):
+def _upgrade_ig_cdn(url: str) -> str:
+    if not url:
+        return ""
+    for tag in ["s150x150", "s320x320", "s480x480", "s640x640", "s720x720", "s1080x1080"]:
+        url = url.replace(tag, "s1080x1080")
+    return _clean_url(url)
+
+
+def _pick_pic(p: dict) -> str:
     if not isinstance(p, dict):
         return ""
-    # Try multiple keys for HD pictures
-    pic = p.get("profile_pic_url_hd") or p.get("hd_profile_pic_url_info", {}).get("url")
-    if not pic:
-        hd_info = p.get("hd_profile_pic_url_info")
-        if isinstance(hd_info, dict): pic = hd_info.get("url")
-    if not pic:
-        hd_versions = p.get("hd_profile_pic_versions")
-        if isinstance(hd_versions, list) and hd_versions:
-            # Pick the largest one
-            sorted_versions = sorted(hd_versions, key=lambda x: x.get("width", 0), reverse=True)
-            pic = sorted_versions[0].get("url")
-    if not pic:
-        pic = p.get("profile_pic_url")
-    
-    return _force_hd_url(pic) if pic else ""
+    candidates = [
+        p.get("profile_pic_url_hd"),
+        (p.get("hd_profile_pic_url_info") or {}).get("url") if isinstance(p.get("hd_profile_pic_url_info"), dict) else None,
+        p.get("profile_pic_url"),
+    ]
+    hd_versions = p.get("hd_profile_pic_versions")
+    if isinstance(hd_versions, list) and hd_versions:
+        hd_versions = sorted(hd_versions, key=lambda x: x.get("width", 0), reverse=True)
+        candidates.insert(0, hd_versions[0].get("url"))
+
+    for c in candidates:
+        if c:
+            return _upgrade_ig_cdn(c)
+    return ""
+
+
+def _norm_result(username, full_name="", pic="", is_verified=False, bio=""):
+    return {
+        "username": username,
+        "full_name": full_name or "",
+        "profile_pic_url": _upgrade_ig_cdn(pic),
+        "is_verified": bool(is_verified),
+        "bio": bio or "",
+    }
 
 async def _provider_brightdata(username, _key):
     """Uses Bright Data Web Unlocker to fetch the profile page and extract HD data."""
@@ -538,7 +554,7 @@ async def _provider_socialcrawl(username, _key):
 
 async def _provider_rocketapi(username, _key):
     """RocketAPI.io provider"""
-    api_key = "sNEUALJdEml0VRvaCA0QOg"
+    api_key = os.environ.get("ROCKETAPI_KEY", "sNEUALJdEml0VRvaCA0QOg")
     url = "https://rocketapi.io/api/instagram/user/get_info"
     headers = {"Authorization": f"Token {api_key}", "Content-Type": "application/json"}
     payload = {"username": username}
@@ -560,7 +576,8 @@ async def _provider_rocketapi(username, _key):
 
 async def _provider_starapi(username, _key):
     """StarAPI (RapidAPI) provider with key cycling"""
-    star_keys = ["ee6af745afmshd0328d2962d87e6p1b9b49jsna966d152f641"]
+    env_key = os.environ.get("STARAPI_KEY", "")
+    star_keys = [k for k in [env_key, "ee6af745afmshd0328d2962d87e6p1b9b49jsna966d152f641"] if k]
     host = "instagram-scraper-2025.p.rapidapi.com"
     for k in star_keys:
         try:
@@ -845,7 +862,119 @@ async def _provider_public_web(username, _key):
     return {}
 
 
+async def _provider_session_cookie(username, _key, session: Optional[dict] = None):
+    """Authenticated provider using stored Instagram session cookies.
+    Hits the private i.instagram.com API exactly like a logged-in browser does —
+    the same technique used by savefromins.com / save-free.com."""
+    if not session:
+        return {}
+
+    cookies = {
+        "sessionid": session["sessionid"],
+        "csrftoken": session["csrftoken"],
+        "ds_user_id": session["ds_user_id"],
+    }
+    if session.get("ig_did"):
+        cookies["ig_did"] = session["ig_did"]
+    if session.get("mid"):
+        cookies["mid"] = session["mid"]
+
+    base_headers = {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+        "X-IG-App-ID": "936619743392459",
+        "X-ASBD-ID": "198387",
+        "X-CSRFToken": session["csrftoken"],
+        "X-IG-WWW-Claim": session.get("ig_claim") or "0",
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Origin": "https://www.instagram.com",
+        "Referer": f"https://www.instagram.com/{username}/",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-site",
+    }
+
+    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, verify=False) as cx:
+        # Attempt 1: private web_profile_info endpoint (returns full HD data when authenticated)
+        try:
+            r = await cx.get(
+                f"https://i.instagram.com/api/v1/users/web_profile_info/?username={username}",
+                headers=base_headers, cookies=cookies,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                user = (data.get("data") or {}).get("user") or {}
+                if user:
+                    return _norm_result(
+                        user.get("username") or username,
+                        user.get("full_name"),
+                        _pick_pic(user),
+                        user.get("is_verified"),
+                        user.get("biography"),
+                    )
+        except Exception as e:
+            logger.warning(f"session_cookie web_profile_info failed: {e}")
+
+        # Attempt 2: ?__a=1 JSON endpoint (works when logged in)
+        try:
+            r = await cx.get(
+                f"https://www.instagram.com/{username}/?__a=1&__d=dis",
+                headers={**base_headers, "X-Requested-With": "XMLHttpRequest"},
+                cookies=cookies,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                user = (data.get("graphql") or {}).get("user") or (data.get("data") or {}).get("user") or {}
+                if user:
+                    return _norm_result(
+                        user.get("username") or username,
+                        user.get("full_name"),
+                        _pick_pic(user),
+                        user.get("is_verified"),
+                        user.get("biography"),
+                    )
+        except Exception as e:
+            logger.warning(f"session_cookie __a=1 failed: {e}")
+
+        # Attempt 3: regular page scrape with cookies (logged-in page includes full JSON)
+        try:
+            r = await cx.get(
+                f"https://www.instagram.com/{username}/",
+                headers={**base_headers, "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
+                cookies=cookies,
+            )
+            if r.status_code == 200:
+                html = r.text
+                pic = None
+                for pat in [
+                    r'"profile_pic_url_hd"\s*:\s*"([^"]+)"',
+                    r'"hd_profile_pic_url_info"\s*:\s*\{\s*"url"\s*:\s*"([^"]+)"',
+                    r'"profile_pic_url"\s*:\s*"([^"]+)"',
+                    r'<meta property="og:image" content="([^"]+)"',
+                ]:
+                    m = re.search(pat, html)
+                    if m:
+                        pic = _clean_url(m.group(1))
+                        break
+                name_m = re.search(r'"full_name"\s*:\s*"([^"]+)"', html)
+                bio_m = re.search(r'"biography"\s*:\s*"([^"]+)"', html)
+                ver_m = re.search(r'"is_verified"\s*:\s*(true|false)', html)
+                if pic or name_m:
+                    return _norm_result(
+                        username,
+                        name_m.group(1).replace("\\", "") if name_m else "",
+                        pic or "",
+                        ver_m and ver_m.group(1) == "true",
+                        bio_m.group(1).replace("\\n", "\n").replace("\\", "") if bio_m else "",
+                    )
+        except Exception as e:
+            logger.warning(f"session_cookie page scrape failed: {e}")
+
+    return {}
+
+
 ALL_PROVIDERS = {
+    "session_cookie": _provider_session_cookie,
     "rocketapi": _provider_rocketapi,
     "starapi": _provider_starapi,
     "brightdata_dataset": _provider_brightdata_dataset,
@@ -855,57 +984,112 @@ ALL_PROVIDERS = {
     "profile1": _provider_profile1, "scraper_stable": _provider_scraper_stable,
     "scraper2": _provider_scraper2, "looter2": _provider_looter2
 }
-DEFAULT_ORDER = "rocketapi,starapi,brightdata_dataset,brightdata,imginn,save_free,public,query_a,downloader,socialcrawl,scrapedo,bot,cheapest,media_api,profile1,scraper_stable,scraper2"
+DEFAULT_ORDER = "session_cookie,rocketapi,starapi,brightdata_dataset,brightdata,socialcrawl,scrapedo,cheapest,media_api,profile1,scraper_stable,scraper2,looter2"
 
 
-async def fetch_instagram_profile(username, download=False, user_id=None, profile_id=None):
-    key = os.environ.get("RAPIDAPI_KEY", "")
-    order = [x.strip() for x in os.environ.get("SCRAPER_ORDER", DEFAULT_ORDER).split(",") if x.strip()]
+def _get_env_ig_session() -> Optional[dict]:
+    """Build a shared Instagram session from server-side environment variables."""
+    sessionid = os.environ.get("IG_SESSIONID", "").strip()
+    csrftoken = os.environ.get("IG_CSRFTOKEN", "").strip()
+    ds_user_id = os.environ.get("IG_DS_USER_ID", "").strip()
+
+    # Do not use a partial environment session.
+    if not sessionid or not csrftoken or not ds_user_id:
+        return None
+
+    session = {
+        "sessionid": sessionid,
+        "csrftoken": csrftoken,
+        "ds_user_id": ds_user_id,
+    }
+
+    optional_env_fields = {
+        "IG_IG_DID": "ig_did",
+        "IG_MID": "mid",
+        "IG_CLAIM": "ig_claim",
+    }
+    for env_name, session_field in optional_env_fields.items():
+        value = os.environ.get(env_name, "").strip()
+        if value:
+            session[session_field] = value
+
+    return session
+
+
+async def _get_ig_session(user_id: str) -> Optional[dict]:
+    """Look up a user's stored session, falling back to the server environment."""
+    stored_session = await db.ig_sessions.find_one({"user_id": user_id})
+    return stored_session or _get_env_ig_session()
+
+
+async def fetch_instagram_profile(username, download=False, user_id=None, profile_id=None, session=None):
+    key = os.environ.get("RAPIDAPI_KEY")
+    order = [x.strip() for x in os.environ.get("SCRAPER_ORDER", ",".join(DEFAULT_ORDER)).split(",") if x.strip()]
+    best = None
     last_err = None
-    best_result = {}
-    
+
     for name in order:
         fn = ALL_PROVIDERS.get(name)
-        if not fn: continue
+        if not fn:
+            continue
         try:
-            result = await fn(username, key)
-            if result and (result.get("profile_pic_url") or result.get("full_name") or result.get("bio")):
-                # If we found a picture, download it locally if requested
-                pic_url = result.get("profile_pic_url")
-                if pic_url and download and user_id and profile_id:
-                    try:
-                        local_url = await download_profile_pic(pic_url, user_id, profile_id)
-                        if local_url:
-                            result["profile_pic_url"] = local_url
-                            result["pic_source"] = "manual" # Treat as local
-                    except Exception as e:
-                        logger.warning(f"Auto-download failed: {e}")
-                
-                if result.get("profile_pic_url"):
-                    return result
-                if not best_result:
-                    best_result = result
+            # session_cookie provider needs the session dict passed explicitly
+            if name == "session_cookie":
+                result = await fn(username, key, session)
+            else:
+                result = await fn(username, key)
+            if not result:
                 continue
+
+            pic = result.get("profile_pic_url") or ""
+            pic = _upgrade_ig_cdn(pic)
+
+            if pic and download and user_id and profile_id:
+                local_url = await download_profile_pic(pic, user_id, profile_id)
+                if local_url:
+                    result["profile_pic_url"] = local_url
+                    result["pic_source"] = "local"
+                else:
+                    result["pic_source"] = "fetched"
+            else:
+                result["pic_source"] = "fetched"
+
+            result["profile_pic_url"] = pic if not download or not user_id or not profile_id else result["profile_pic_url"]
+            return result
         except Exception as e:
-            logger.warning(f"[{name}] failed: {e}")
             last_err = e
-            
-    return best_result or {}
+            logger.warning(f"{name} failed: {e}")
+            if not best:
+                best = {}
+    return best or {}
+
 
 async def download_profile_pic(url, user_id, profile_id):
-    """Download an external image and save it locally to prevent expiration"""
     user_dir = UPLOADS_DIR / str(user_id)
-    user_dir.mkdir(exist_ok=True)
-    file_path = user_dir / f"{profile_id}_auto.jpg"
-    
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"}
+    user_dir.mkdir(parents=True, exist_ok=True)
+
+    url = _upgrade_ig_cdn(url)
+    ext = ".jpg"
+    if ".png" in url.lower():
+        ext = ".png"
+    elif ".webp" in url.lower():
+        ext = ".webp"
+    elif ".gif" in url.lower():
+        ext = ".gif"
+
+    file_path = user_dir / f"{profile_id}_auto{ext}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Referer": "https://www.instagram.com/",
+    }
+
     try:
-        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as cx:
+        async with httpx.AsyncClient(timeout=25.0, follow_redirects=True, verify=False) as cx:
             r = await cx.get(url, headers=headers)
-            if r.status_code == 200:
+            if r.status_code == 200 and r.content:
                 with open(file_path, "wb") as f:
                     f.write(r.content)
-                return f"/uploads/{user_id}/{profile_id}_auto.jpg"
+                return f"/uploads/{user_id}/{file_path.name}"
     except Exception as e:
         logger.warning(f"Download failed: {e}")
     return None
@@ -976,7 +1160,7 @@ def _profile_out(p, mutual_follower_pics=None):
         "id": p["id"],
         "username": p["username"],
         "full_name": p.get("full_name", ""),
-        "profile_pic_url": p.get("profile_pic_url", ""),
+        "profile_pic_url": _upgrade_ig_cdn(p.get("profile_pic_url") or ""),
         "is_verified": p.get("is_verified", False),
         "bio": p.get("bio", ""),
         "category_ids": p.get("category_ids", []),
@@ -1055,7 +1239,8 @@ async def add_profile(payload: ProfileIn, user: dict = Depends(get_current_user)
         return out
     
     # Auto-download picture during add to prevent link expiration
-    fetched = await fetch_instagram_profile(username, download=True, user_id=user["id"], profile_id=str(uuid.uuid4()))
+    session = await _get_ig_session(user["id"])
+    fetched = await fetch_instagram_profile(username, download=True, user_id=user["id"], profile_id=str(uuid.uuid4()), session=session)
     profile = Profile(username=fetched.get("username") or username,
         full_name=fetched.get("full_name", ""), profile_pic_url=fetched.get("profile_pic_url", ""),
         is_verified=fetched.get("is_verified", False), bio=fetched.get("bio", ""),
@@ -1102,7 +1287,8 @@ async def refresh_profile(pid: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Profile not found")
     try:
         # Auto-download picture during refresh to prevent link expiration
-        fetched = await fetch_instagram_profile(p["username"], download=True, user_id=user["id"], profile_id=p["id"])
+        session = await _get_ig_session(user["id"])
+        fetched = await fetch_instagram_profile(p["username"], download=True, user_id=user["id"], profile_id=p["id"], session=session)
         if not fetched:
             raise HTTPException(status_code=502, detail="All scrapers failed. Instagram might be blocking requests. Try 'Paste HTML' in Edit panel.")
         
@@ -1282,7 +1468,8 @@ async def remove_picture(pid: str, user: dict = Depends(get_current_user)):
     
     new_data = {"profile_pic_url": "", "pic_public_id": None, "pic_source": "none"}
     try:
-        fetched = await fetch_instagram_profile(p["username"])
+        session = await _get_ig_session(user["id"])
+        fetched = await fetch_instagram_profile(p["username"], session=session)
         if fetched.get("profile_pic_url"):
             new_data["profile_pic_url"] = fetched["profile_pic_url"]
             new_data["pic_source"] = "fetched"
@@ -1471,7 +1658,8 @@ async def bulk_add_profiles(payload: BulkIn, user: dict = Depends(get_current_us
             results.append({"input": item.url_or_username, "status": "merged",
                             "username": existing["username"], "id": existing["id"]})
             continue
-        fetched = await fetch_instagram_profile(username)
+        session = await _get_ig_session(user["id"])
+        fetched = await fetch_instagram_profile(username, session=session)
         profile = Profile(username=fetched.get("username") or username,
             full_name=fetched.get("full_name", ""), profile_pic_url=fetched.get("profile_pic_url", ""),
             is_verified=fetched.get("is_verified", False), bio=fetched.get("bio", ""),
@@ -1549,7 +1737,8 @@ async def check_profile_activity(pid: str, user: dict = Depends(get_current_user
         raise HTTPException(status_code=404, detail="Profile not found")
     
     # Try to fetch updated profile data
-    fetched = await fetch_instagram_profile(p["username"])
+    session = await _get_ig_session(user["id"])
+    fetched = await fetch_instagram_profile(p["username"], session=session)
     if not fetched:
         raise HTTPException(status_code=502, detail="Could not check activity")
     
@@ -1571,10 +1760,11 @@ async def refresh_all_profiles(user: dict = Depends(get_current_user)):
     """Refresh all profile pictures and activity for the user"""
     profiles = await db.profiles.find({"user_id": user["id"]}).to_list(None)
     results = []
-    
+    session = await _get_ig_session(user["id"])
+
     for p in profiles:
         try:
-            fetched = await fetch_instagram_profile(p["username"])
+            fetched = await fetch_instagram_profile(p["username"], session=session)
             if not fetched:
                 results.append({"username": p["username"], "status": "failed"})
                 continue
@@ -1604,6 +1794,43 @@ async def refresh_all_profiles(user: dict = Depends(get_current_user)):
     return {"results": results, "total": len(results)}
 
 
+# ─── Instagram Session Cookie Management ─────────────────────────────────────
+
+@api_router.get("/ig-session")
+async def get_ig_session_status(user: dict = Depends(get_current_user)):
+    s = await db.ig_sessions.find_one({"user_id": user["id"]})
+    if not s:
+        s = _get_env_ig_session()
+        if not s:
+            return {"configured": False}
+        return {
+            "configured": True,
+            "ds_user_id": s.get("ds_user_id"),
+            "source": "environment",
+        }
+    return {
+        "configured": True,
+        "ds_user_id": s.get("ds_user_id"),
+        "created_at": s.get("created_at"),
+        "source": "database",
+    }
+
+
+@api_router.post("/ig-session")
+async def set_ig_session(payload: IgSessionIn, user: dict = Depends(get_current_user)):
+    data = payload.model_dump()
+    data["user_id"] = user["id"]
+    data["created_at"] = datetime.now(timezone.utc).isoformat()
+    await db.ig_sessions.update_one({"user_id": user["id"]}, {"$set": data}, upsert=True)
+    return {"ok": True, "ds_user_id": payload.ds_user_id}
+
+
+@api_router.delete("/ig-session")
+async def clear_ig_session(user: dict = Depends(get_current_user)):
+    await db.ig_sessions.delete_one({"user_id": user["id"]})
+    return {"ok": True}
+
+
 app.include_router(api_router)
 
 # Mount uploads directory for serving local files
@@ -1619,6 +1846,7 @@ async def on_startup():
     await db.users.create_index("email", unique=True)
     await db.categories.create_index([("user_id", 1), ("name", 1)])
     await db.profiles.create_index([("user_id", 1), ("username", 1)])
+    await db.ig_sessions.create_index("user_id", unique=True)
     admin_email = os.environ.get("ADMIN_EMAIL", "").lower().strip()
     admin_password = os.environ.get("ADMIN_PASSWORD", "")
     if admin_email and admin_password:
