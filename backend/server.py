@@ -1016,10 +1016,21 @@ def _get_env_ig_session() -> Optional[dict]:
     return session
 
 
+def _has_required_ig_session(session: Optional[dict]) -> bool:
+    return bool(
+        session
+        and session.get("sessionid")
+        and session.get("csrftoken")
+        and session.get("ds_user_id")
+    )
+
+
 async def _get_ig_session(user_id: str) -> Optional[dict]:
     """Look up a user's stored session, falling back to the server environment."""
     stored_session = await db.ig_sessions.find_one({"user_id": user_id})
-    return stored_session or _get_env_ig_session()
+    if _has_required_ig_session(stored_session):
+        return stored_session
+    return _get_env_ig_session()
 
 
 async def fetch_instagram_profile(username, download=False, user_id=None, profile_id=None, session=None):
@@ -1045,7 +1056,7 @@ async def fetch_instagram_profile(username, download=False, user_id=None, profil
             pic = _upgrade_ig_cdn(pic)
 
             if pic and download and user_id and profile_id:
-                local_url = await download_profile_pic(pic, user_id, profile_id)
+                local_url = await download_profile_pic(pic, user_id, profile_id, session=session)
                 if local_url:
                     result["profile_pic_url"] = local_url
                     result["pic_source"] = "local"
@@ -1064,7 +1075,7 @@ async def fetch_instagram_profile(username, download=False, user_id=None, profil
     return best or {}
 
 
-async def download_profile_pic(url, user_id, profile_id):
+async def download_profile_pic(url, user_id, profile_id, session: Optional[dict] = None):
     user_dir = UPLOADS_DIR / str(user_id)
     user_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1082,11 +1093,54 @@ async def download_profile_pic(url, user_id, profile_id):
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
         "Referer": "https://www.instagram.com/",
     }
+    cookies = {}
+    if session:
+        cookies = {
+            key: session[key]
+            for key in ("sessionid", "csrftoken", "ds_user_id")
+            if session.get(key)
+        }
+        if session.get("csrftoken"):
+            headers["X-CSRFToken"] = session["csrftoken"]
+        for key in ("ig_did", "mid"):
+            if session.get(key):
+                cookies[key] = session[key]
 
     try:
         async with httpx.AsyncClient(timeout=25.0, follow_redirects=True, verify=False) as cx:
-            r = await cx.get(url, headers=headers)
+            r = await cx.get(url, headers=headers, cookies=cookies or None)
             if r.status_code == 200 and r.content:
+                # Vercel's function filesystem is ephemeral. Use the existing
+                # Cloudinary setup when available so refreshes return a durable URL.
+                if os.environ.get("CLOUDINARY_CLOUD_NAME"):
+                    try:
+                        result = cloudinary.uploader.upload(
+                            r.content,
+                            folder=f"rolodex/users/{user_id}/auto",
+                            public_id=profile_id,
+                            overwrite=True,
+                            resource_type="image",
+                            transformation=[{
+                                "width": 512,
+                                "height": 512,
+                                "crop": "fill",
+                                "gravity": "face",
+                                "quality": "auto",
+                                "fetch_format": "auto",
+                            }],
+                        )
+                        secure_url = result.get("secure_url")
+                        if secure_url:
+                            return secure_url
+                    except Exception as e:
+                        logger.warning(f"Cloudinary profile download failed, falling back to local storage: {e}")
+
+                # Vercel's local filesystem is ephemeral. Without Cloudinary,
+                # keep the fetched CDN URL rather than saving a path that may
+                # disappear before the browser requests it.
+                if os.environ.get("VERCEL"):
+                    return url
+
                 with open(file_path, "wb") as f:
                     f.write(r.content)
                 return f"/uploads/{user_id}/{file_path.name}"
@@ -1764,7 +1818,13 @@ async def refresh_all_profiles(user: dict = Depends(get_current_user)):
 
     for p in profiles:
         try:
-            fetched = await fetch_instagram_profile(p["username"], session=session)
+            fetched = await fetch_instagram_profile(
+                p["username"],
+                download=True,
+                user_id=user["id"],
+                profile_id=p["id"],
+                session=session,
+            )
             if not fetched:
                 results.append({"username": p["username"], "status": "failed"})
                 continue
@@ -1781,7 +1841,7 @@ async def refresh_all_profiles(user: dict = Depends(get_current_user)):
             got_pic = bool(fetched.get("profile_pic_url"))
             if got_pic and not is_manual:
                 new_data["profile_pic_url"] = fetched["profile_pic_url"]
-                new_data["pic_source"] = "fetched"
+                new_data["pic_source"] = fetched.get("pic_source", "fetched")
             
             if new_data:
                 await db.profiles.update_one({"id": p["id"], "user_id": user["id"]}, {"$set": new_data})
@@ -1799,7 +1859,7 @@ async def refresh_all_profiles(user: dict = Depends(get_current_user)):
 @api_router.get("/ig-session")
 async def get_ig_session_status(user: dict = Depends(get_current_user)):
     s = await db.ig_sessions.find_one({"user_id": user["id"]})
-    if not s:
+    if not _has_required_ig_session(s):
         s = _get_env_ig_session()
         if not s:
             return {"configured": False}
@@ -1808,6 +1868,8 @@ async def get_ig_session_status(user: dict = Depends(get_current_user)):
             "ds_user_id": s.get("ds_user_id"),
             "source": "environment",
         }
+    if not s:
+        return {"configured": False}
     return {
         "configured": True,
         "ds_user_id": s.get("ds_user_id"),
