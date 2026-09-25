@@ -984,58 +984,32 @@ ALL_PROVIDERS = {
     "profile1": _provider_profile1, "scraper_stable": _provider_scraper_stable,
     "scraper2": _provider_scraper2, "looter2": _provider_looter2
 }
-DEFAULT_ORDER = "session_cookie,rocketapi,starapi,brightdata_dataset,brightdata,socialcrawl,scrapedo,cheapest,media_api,profile1,scraper_stable,scraper2,looter2"
+# This must remain a comma-delimited string. The previous `",".join(DEFAULT_ORDER)`
+# expression placed commas between every character, so the fallback loop tried
+# providers such as "s", "e", and "_" rather than actual provider names.
+DEFAULT_ORDER = (
+    "session_cookie,rocketapi,starapi,brightdata_dataset,brightdata,"
+    "socialcrawl,scrapedo,cheapest,media_api,profile1,scraper_stable,"
+    "scraper2,looter2,public,query_a,imginn"
+)
 
 
-def _get_env_ig_session() -> Optional[dict]:
-    """Build a shared Instagram session from server-side environment variables."""
-    sessionid = os.environ.get("IG_SESSIONID", "").strip()
-    csrftoken = os.environ.get("IG_CSRFTOKEN", "").strip()
-    ds_user_id = os.environ.get("IG_DS_USER_ID", "").strip()
-
-    # Do not use a partial environment session.
-    if not sessionid or not csrftoken or not ds_user_id:
-        return None
-
-    session = {
-        "sessionid": sessionid,
-        "csrftoken": csrftoken,
-        "ds_user_id": ds_user_id,
-    }
-
-    optional_env_fields = {
-        "IG_IG_DID": "ig_did",
-        "IG_MID": "mid",
-        "IG_CLAIM": "ig_claim",
-    }
-    for env_name, session_field in optional_env_fields.items():
-        value = os.environ.get(env_name, "").strip()
-        if value:
-            session[session_field] = value
-
-    return session
-
-
-def _has_required_ig_session(session: Optional[dict]) -> bool:
-    return bool(
-        session
-        and session.get("sessionid")
-        and session.get("csrftoken")
-        and session.get("ds_user_id")
-    )
+def get_scraper_order() -> List[str]:
+    """Return configured provider names, or the built-in fallback sequence."""
+    raw_order = os.environ.get("SCRAPER_ORDER", "").strip() or DEFAULT_ORDER
+    return list(dict.fromkeys(
+        name.strip() for name in raw_order.split(",") if name.strip()
+    ))
 
 
 async def _get_ig_session(user_id: str) -> Optional[dict]:
-    """Look up a user's stored session, falling back to the server environment."""
-    stored_session = await db.ig_sessions.find_one({"user_id": user_id})
-    if _has_required_ig_session(stored_session):
-        return stored_session
-    return _get_env_ig_session()
+    """Look up stored Instagram session cookies for a user."""
+    return await db.ig_sessions.find_one({"user_id": user_id})
 
 
 async def fetch_instagram_profile(username, download=False, user_id=None, profile_id=None, session=None):
     key = os.environ.get("RAPIDAPI_KEY")
-    order = [x.strip() for x in os.environ.get("SCRAPER_ORDER", ",".join(DEFAULT_ORDER)).split(",") if x.strip()]
+    order = get_scraper_order()
     best = None
     last_err = None
 
@@ -1056,7 +1030,7 @@ async def fetch_instagram_profile(username, download=False, user_id=None, profil
             pic = _upgrade_ig_cdn(pic)
 
             if pic and download and user_id and profile_id:
-                local_url = await download_profile_pic(pic, user_id, profile_id, session=session)
+                local_url = await download_profile_pic(pic, user_id, profile_id)
                 if local_url:
                     result["profile_pic_url"] = local_url
                     result["pic_source"] = "local"
@@ -1075,7 +1049,7 @@ async def fetch_instagram_profile(username, download=False, user_id=None, profil
     return best or {}
 
 
-async def download_profile_pic(url, user_id, profile_id, session: Optional[dict] = None):
+async def download_profile_pic(url, user_id, profile_id):
     user_dir = UPLOADS_DIR / str(user_id)
     user_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1093,54 +1067,11 @@ async def download_profile_pic(url, user_id, profile_id, session: Optional[dict]
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
         "Referer": "https://www.instagram.com/",
     }
-    cookies = {}
-    if session:
-        cookies = {
-            key: session[key]
-            for key in ("sessionid", "csrftoken", "ds_user_id")
-            if session.get(key)
-        }
-        if session.get("csrftoken"):
-            headers["X-CSRFToken"] = session["csrftoken"]
-        for key in ("ig_did", "mid"):
-            if session.get(key):
-                cookies[key] = session[key]
 
     try:
         async with httpx.AsyncClient(timeout=25.0, follow_redirects=True, verify=False) as cx:
-            r = await cx.get(url, headers=headers, cookies=cookies or None)
+            r = await cx.get(url, headers=headers)
             if r.status_code == 200 and r.content:
-                # Vercel's function filesystem is ephemeral. Use the existing
-                # Cloudinary setup when available so refreshes return a durable URL.
-                if os.environ.get("CLOUDINARY_CLOUD_NAME"):
-                    try:
-                        result = cloudinary.uploader.upload(
-                            r.content,
-                            folder=f"rolodex/users/{user_id}/auto",
-                            public_id=profile_id,
-                            overwrite=True,
-                            resource_type="image",
-                            transformation=[{
-                                "width": 512,
-                                "height": 512,
-                                "crop": "fill",
-                                "gravity": "face",
-                                "quality": "auto",
-                                "fetch_format": "auto",
-                            }],
-                        )
-                        secure_url = result.get("secure_url")
-                        if secure_url:
-                            return secure_url
-                    except Exception as e:
-                        logger.warning(f"Cloudinary profile download failed, falling back to local storage: {e}")
-
-                # Vercel's local filesystem is ephemeral. Without Cloudinary,
-                # keep the fetched CDN URL rather than saving a path that may
-                # disappear before the browser requests it.
-                if os.environ.get("VERCEL"):
-                    return url
-
                 with open(file_path, "wb") as f:
                     f.write(r.content)
                 return f"/uploads/{user_id}/{file_path.name}"
@@ -1292,10 +1223,13 @@ async def add_profile(payload: ProfileIn, user: dict = Depends(get_current_user)
         out["duplicate"] = True
         return out
     
+    # Use the profile's final ID for a locally cached profile picture.
+    profile_id = str(uuid.uuid4())
+
     # Auto-download picture during add to prevent link expiration
     session = await _get_ig_session(user["id"])
-    fetched = await fetch_instagram_profile(username, download=True, user_id=user["id"], profile_id=str(uuid.uuid4()), session=session)
-    profile = Profile(username=fetched.get("username") or username,
+    fetched = await fetch_instagram_profile(username, download=True, user_id=user["id"], profile_id=profile_id, session=session)
+    profile = Profile(id=profile_id, username=fetched.get("username") or username,
         full_name=fetched.get("full_name", ""), profile_pic_url=fetched.get("profile_pic_url", ""),
         is_verified=fetched.get("is_verified", False), bio=fetched.get("bio", ""),
         category_ids=_enforce_mutex(payload.category_ids), user_id=user["id"],
@@ -1712,13 +1646,27 @@ async def bulk_add_profiles(payload: BulkIn, user: dict = Depends(get_current_us
             results.append({"input": item.url_or_username, "status": "merged",
                             "username": existing["username"], "id": existing["id"]})
             continue
+        profile_id = str(uuid.uuid4())
         session = await _get_ig_session(user["id"])
-        fetched = await fetch_instagram_profile(username, session=session)
-        profile = Profile(username=fetched.get("username") or username,
+        fetched = await fetch_instagram_profile(
+            username,
+            download=True,
+            user_id=user["id"],
+            profile_id=profile_id,
+            session=session,
+        )
+        profile = Profile(id=profile_id, username=fetched.get("username") or username,
             full_name=fetched.get("full_name", ""), profile_pic_url=fetched.get("profile_pic_url", ""),
             is_verified=fetched.get("is_verified", False), bio=fetched.get("bio", ""),
             category_ids=_enforce_mutex(cat_ids), user_id=user["id"],
-            pic_source="fetched" if fetched.get("profile_pic_url") else "none")
+            pic_source=fetched.get("pic_source", "fetched") if fetched.get("profile_pic_url") else "none")
+        await db.profiles.insert_one(profile.model_dump())
+        results.append({
+            "input": item.url_or_username,
+            "status": "added",
+            "username": profile.username,
+            "id": profile.id,
+        })
     return {"results": results, "count": len(results)}
 
 
@@ -1818,13 +1766,7 @@ async def refresh_all_profiles(user: dict = Depends(get_current_user)):
 
     for p in profiles:
         try:
-            fetched = await fetch_instagram_profile(
-                p["username"],
-                download=True,
-                user_id=user["id"],
-                profile_id=p["id"],
-                session=session,
-            )
+            fetched = await fetch_instagram_profile(p["username"], session=session)
             if not fetched:
                 results.append({"username": p["username"], "status": "failed"})
                 continue
@@ -1841,7 +1783,7 @@ async def refresh_all_profiles(user: dict = Depends(get_current_user)):
             got_pic = bool(fetched.get("profile_pic_url"))
             if got_pic and not is_manual:
                 new_data["profile_pic_url"] = fetched["profile_pic_url"]
-                new_data["pic_source"] = fetched.get("pic_source", "fetched")
+                new_data["pic_source"] = "fetched"
             
             if new_data:
                 await db.profiles.update_one({"id": p["id"], "user_id": user["id"]}, {"$set": new_data})
@@ -1859,23 +1801,9 @@ async def refresh_all_profiles(user: dict = Depends(get_current_user)):
 @api_router.get("/ig-session")
 async def get_ig_session_status(user: dict = Depends(get_current_user)):
     s = await db.ig_sessions.find_one({"user_id": user["id"]})
-    if not _has_required_ig_session(s):
-        s = _get_env_ig_session()
-        if not s:
-            return {"configured": False}
-        return {
-            "configured": True,
-            "ds_user_id": s.get("ds_user_id"),
-            "source": "environment",
-        }
     if not s:
         return {"configured": False}
-    return {
-        "configured": True,
-        "ds_user_id": s.get("ds_user_id"),
-        "created_at": s.get("created_at"),
-        "source": "database",
-    }
+    return {"configured": True, "ds_user_id": s.get("ds_user_id"), "created_at": s.get("created_at")}
 
 
 @api_router.post("/ig-session")
