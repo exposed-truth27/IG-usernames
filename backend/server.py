@@ -323,29 +323,55 @@ def _clean_url(u: str) -> str:
 
 
 def _upgrade_ig_cdn(url: str) -> str:
-    if not url:
-        return ""
-    for tag in ["s150x150", "s320x320", "s480x480", "s640x640", "s720x720", "s1080x1080"]:
-        url = url.replace(tag, "s1080x1080")
+    # Do not rewrite Instagram CDN paths: modern links may be signed, and
+    # replacing a size segment can invalidate the URL. HD selection happens in
+    # _pick_pic by choosing an actual HD field/version when the provider has one.
     return _clean_url(url)
 
 
 def _pick_pic(p: dict) -> str:
     if not isinstance(p, dict):
         return ""
-    candidates = [
-        p.get("profile_pic_url_hd"),
-        (p.get("hd_profile_pic_url_info") or {}).get("url") if isinstance(p.get("hd_profile_pic_url_info"), dict) else None,
-        p.get("profile_pic_url"),
-    ]
-    hd_versions = p.get("hd_profile_pic_versions")
-    if isinstance(hd_versions, list) and hd_versions:
-        hd_versions = sorted(hd_versions, key=lambda x: x.get("width", 0), reverse=True)
-        candidates.insert(0, hd_versions[0].get("url"))
+    # Prefer explicit HD URL fields and the largest HD version. Provider APIs
+    # vary: dimensions may be strings and URLs may be nested in info objects.
+    for key in ("profile_pic_url_hd", "hd_profile_pic_url_info"):
+        value = p.get(key)
+        if isinstance(value, str) and value.strip():
+            return _clean_url(value)
+        if isinstance(value, dict) and isinstance(value.get("url"), str) and value["url"].strip():
+            return _clean_url(value["url"])
 
-    for c in candidates:
-        if c:
-            return _upgrade_ig_cdn(c)
+    hd_versions = p.get("hd_profile_pic_versions") or p.get("profile_pic_url_hd_versions")
+    if isinstance(hd_versions, list):
+        def version_width(item):
+            if not isinstance(item, dict):
+                return 0
+            try:
+                return int(item.get("width") or item.get("x") or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        for version in sorted(hd_versions, key=version_width, reverse=True):
+            if isinstance(version, dict):
+                url = version.get("url") or version.get("src")
+                if isinstance(url, str) and url.strip():
+                    return _clean_url(url)
+
+    # Some APIs wrap the HD fields inside profile_pic or user data.
+    nested = p.get("profile_pic") or p.get("profile_picture")
+    if isinstance(nested, dict):
+        nested_pic = _pick_pic(nested)
+        if nested_pic:
+            return nested_pic
+
+    for key in ("profile_pic_url", "profile_picture_url", "avatar", "picture"):
+        value = p.get(key)
+        if isinstance(value, str) and value.strip():
+            return _clean_url(value)
+        if isinstance(value, dict):
+            nested_url = value.get("url") or value.get("src")
+            if isinstance(nested_url, str) and nested_url.strip():
+                return _clean_url(nested_url)
     return ""
 
 
@@ -1010,8 +1036,11 @@ async def _get_ig_session(user_id: str) -> Optional[dict]:
 async def fetch_instagram_profile(username, download=False, user_id=None, profile_id=None, session=None):
     key = os.environ.get("RAPIDAPI_KEY")
     order = get_scraper_order()
-    best = None
-    last_err = None
+    # A provider can return name/bio without an avatar. Keep that data but
+    # continue through the remaining providers rather than stopping before an
+    # HD-capable provider gets a chance.
+    best = {"username": username, "full_name": "", "profile_pic_url": "",
+            "is_verified": False, "bio": ""}
 
     for name in order:
         fn = ALL_PROVIDERS.get(name)
@@ -1026,27 +1055,29 @@ async def fetch_instagram_profile(username, download=False, user_id=None, profil
             if not result:
                 continue
 
-            pic = result.get("profile_pic_url") or ""
-            pic = _upgrade_ig_cdn(pic)
+            pic = _pick_pic(result)
+            for field in ("username", "full_name", "bio", "is_verified"):
+                if result.get(field) not in (None, ""):
+                    best[field] = result[field]
+            if not pic:
+                continue
 
-            if pic and download and user_id and profile_id:
+            best["profile_pic_url"] = pic
+            if download and user_id and profile_id:
                 local_url = await download_profile_pic(pic, user_id, profile_id)
                 if local_url:
-                    result["profile_pic_url"] = local_url
-                    result["pic_source"] = "local"
+                    best["profile_pic_url"] = local_url
+                    best["pic_source"] = "local"
                 else:
-                    result["pic_source"] = "fetched"
+                    best["pic_source"] = "fetched"
             else:
-                result["pic_source"] = "fetched"
-
-            result["profile_pic_url"] = pic if not download or not user_id or not profile_id else result["profile_pic_url"]
-            return result
+                best["pic_source"] = "fetched"
+            return best
         except Exception as e:
-            last_err = e
             logger.warning(f"{name} failed: {e}")
-            if not best:
-                best = {}
-    return best or {}
+    # Returning name/bio is still useful if no configured provider supplied an
+    # avatar. Callers can distinguish this from a complete image fetch.
+    return best if best.get("full_name") or best.get("bio") or best.get("profile_pic_url") else {}
 
 
 async def download_profile_pic(url, user_id, profile_id):
