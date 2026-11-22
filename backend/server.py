@@ -1247,12 +1247,8 @@ async def add_profile(payload: ProfileIn, user: dict = Depends(get_current_user)
     existing = await db.profiles.find_one({"user_id": user["id"],
         "username": {"$regex": f"^{re.escape(username)}$", "$options": "i"}})
     if existing:
-        new_cats = _enforce_mutex(list({*existing.get("category_ids", []), *payload.category_ids}),
-                                   existing.get("category_ids", []))
-        await db.profiles.update_one({"_id": existing["_id"]}, {"$set": {"category_ids": new_cats}})
-        out = _profile_out({**existing, "category_ids": new_cats})
-        out["duplicate"] = True
-        return out
+        raise HTTPException(status_code=409,
+            detail=f"@{existing['username']} is already in your collection")
     
     # Use the profile's final ID for a locally cached profile picture.
     profile_id = str(uuid.uuid4())
@@ -1671,10 +1667,8 @@ async def bulk_add_profiles(payload: BulkIn, user: dict = Depends(get_current_us
         existing = await db.profiles.find_one({"user_id": user["id"],
             "username": {"$regex": f"^{re.escape(username)}$", "$options": "i"}})
         if existing:
-            new_cats = _enforce_mutex(list({*existing.get("category_ids", []), *cat_ids}),
-                                       existing.get("category_ids", []))
-            await db.profiles.update_one({"_id": existing["_id"]}, {"$set": {"category_ids": new_cats}})
-            results.append({"input": item.url_or_username, "status": "merged",
+            results.append({"input": item.url_or_username, "status": "duplicate",
+                            "error": f"@{existing['username']} already in collection",
                             "username": existing["username"], "id": existing["id"]})
             continue
         profile_id = str(uuid.uuid4())
@@ -1868,6 +1862,22 @@ async def on_startup():
     await db.categories.create_index([("user_id", 1), ("name", 1)])
     await db.profiles.create_index([("user_id", 1), ("username", 1)])
     await db.ig_sessions.create_index("user_id", unique=True)
+    # One-time cleanup: remove duplicate profiles (same user + username, case-insensitive)
+    pipeline = [
+        {"$group": {
+            "_id": {"user_id": "$user_id", "uname": {"$toLower": "$username"}},
+            "docs": {"$push": "$$ROOT"}, "count": {"$sum": 1}}},
+        {"$match": {"count": {"$gt": 1}}},
+    ]
+    async for group in db.profiles.aggregate(pipeline):
+        docs = sorted(group["docs"], key=lambda d: str(d.get("_id", "")))
+        keeper, extras = docs[0], docs[1:]
+        merged = list({*keeper.get("category_ids", []),
+                       *[c for d in extras for c in d.get("category_ids", [])]})
+        await db.profiles.update_one({"_id": keeper["_id"]},
+            {"$set": {"category_ids": merged}})
+        for d in extras:
+            await db.profiles.delete_one({"_id": d["_id"]})
     admin_email = os.environ.get("ADMIN_EMAIL", "").lower().strip()
     admin_password = os.environ.get("ADMIN_PASSWORD", "")
     if admin_email and admin_password:
